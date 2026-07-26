@@ -1,0 +1,5 @@
+__pycache__/
+*.py[cod]
+*.zip
+.vscode/
+.DS_Store
