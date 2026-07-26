@@ -1,0 +1,2 @@
+fake-bpy-module-4.5==20260128
+pytest==9.1.1
