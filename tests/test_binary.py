@@ -95,18 +95,18 @@ class TestBinaryReaderStrings:
 
     def test_read_name_strips_padding(self):
         r = BinaryReader(b"joint1\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00")
-        assert r.read_name(16) == "joint1"
+        assert r.read_key(16) == "joint1"
 
     def test_read_name_full_length_no_padding(self):
         name = "0123456789abcdef"  # exactly 16 chars, no null terminator
         r = BinaryReader(name.encode("ascii"))
-        assert r.read_name(16) == name
+        assert r.read_key(16) == name
 
     def test_read_name_only_strips_null_bytes_not_trailing_garbage(self):
         # Documents current behavior: read_name removes ALL \x00 bytes, so
         # bytes after an embedded null are kept rather than truncated there.
         r = BinaryReader(b"ab\x00cd\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00")
-        assert r.read_name(16) == "abcd"
+        assert r.read_key(16) == "abcd"
 
 
 class TestBinaryReaderPositioning:

@@ -1,6 +1,6 @@
 
 from .binary import BinaryReader, BinaryWriter
-from .dictionary import read_dictionary
+from .dictionary import read_dictionary, write_dictionary
 from enum import IntEnum
 
 
@@ -52,6 +52,24 @@ class MDL0:
             r.seek(offset)
             self.models.append(Model(r))
 
+    def write(self, w: BinaryWriter):
+        base = w.tell()
+        w.write_str(self.SIGNATURE)
+
+        pos_size = w.tell()
+        w.write_u32(0)
+        write_dictionary(w, self.dict, lambda wr, v: wr.write_u32(v))
+        for i, model in enumerate(self.models):
+            self.dict.values()[i] = w.tell() - base
+            model.write(w)
+        end = w.tell()
+        w.patch_u32(pos_size, end - base)
+
+        # Rewrite dictionary with updated offsets
+        w.seek(base + 8)
+        write_dictionary(w, self.dict, lambda wr, v: wr.write_u32(v))
+        w.seek(end)
+
 
 class Model:
     def __init__(self, r: BinaryReader):
@@ -78,6 +96,27 @@ class Model:
             r.seek(base + self.evp_offset)
             self.evp_matrices = EvpMatrices(r, len(self.nodes))
 
+    def write(self, w: BinaryWriter):
+        base = w.tell()
+        w.write_u32s([0, 0, 0, 0, 0])  # size and offsets
+        self.info.write(w)
+        self.nodes.write(w)
+
+        w.patch_u32(base + 4, w.tell() - base)  # Sbc offset
+        w.write_bytes(self.sbc)
+
+        w.patch_u32(base + 8, w.tell() - base)  # MaterialSet offset
+        self.materials.write(w)
+
+        w.patch_u32(base + 12, w.tell() - base)  # ShapeSet offset
+        self.shapes.write(w)
+
+        w.patch_u32(base + 16, w.tell() - base)  # EvpMatrices offset
+        if self.evp_matrices is not None:
+            self.evp_matrices.write(w)
+
+        w.patch_u32(base, w.tell() - base)  # Size
+
 
 class ModelInfo:
     def __init__(self, r: BinaryReader):
@@ -103,6 +142,30 @@ class ModelInfo:
         self.box_d = r.read_fx16()
         self.box_pos_scale = r.read_fx32()
         self.box_inv_pos_scale = r.read_fx32()
+
+    def write(self, w: BinaryWriter):
+        w.write_u8(self.sbc_type)
+        w.write_u8(self.scaling_rule)
+        w.write_u8(self.tex_mtx_mode)
+        w.write_u8(self.node_count)
+        w.write_u8(self.mat_count)
+        w.write_u8(self.shape_count)
+        w.write_u8(self.first_unused_mtx_stack_id)
+        w.write_u8(0)
+        w.write_fx32(self.pos_scale)
+        w.write_fx32(self.inv_pos_scale)
+        w.write_u16(self.vertex_count)
+        w.write_u16(self.polygon_count)
+        w.write_u16(self.triangle_count)
+        w.write_u16(self.quad_count)
+        w.write_fx16(self.box_x)
+        w.write_fx16(self.box_y)
+        w.write_fx16(self.box_z)
+        w.write_fx16(self.box_w)
+        w.write_fx16(self.box_h)
+        w.write_fx16(self.box_d)
+        w.write_fx32(self.box_pos_scale)
+        w.write_fx32(self.box_inv_pos_scale)
 
 
 class NodeData:
@@ -149,6 +212,33 @@ class NodeData:
             self.inv_sy = r.read_fx32()
             self.inv_sz = r.read_fx32()
 
+    def write(self, w: BinaryWriter):
+        w.write_u16(self.flag)
+        w.write_u16(self._00)
+        if not self.hasflag(SrtFlag.TRANSLATION_ZERO):
+            w.write_fx32(self.tx)
+            w.write_fx32(self.ty)
+            w.write_fx32(self.tz)
+        if not self.hasflag(SrtFlag.ROTATION_ZERO | SrtFlag.HAS_PIVOT):
+            w.write_fx16(self._01)
+            w.write_fx16(self._02)
+            w.write_fx16(self._10)
+            w.write_fx16(self._11)
+            w.write_fx16(self._12)
+            w.write_fx16(self._20)
+            w.write_fx16(self._21)
+            w.write_fx16(self._22)
+        if self.hasflag(SrtFlag.HAS_PIVOT) and not self.hasflag(SrtFlag.ROTATION_ZERO):
+            w.write_fx16(self.a)
+            w.write_fx16(self.b)
+        if not self.hasflag(SrtFlag.SCALE_ONE):
+            w.write_fx32(self.sx)
+            w.write_fx32(self.sy)
+            w.write_fx32(self.sz)
+            w.write_fx32(self.inv_sx)
+            w.write_fx32(self.inv_sy)
+            w.write_fx32(self.inv_sz)
+
     def hasflag(self, flag: SrtFlag) -> bool:
         return _hasflag(self.flag, flag)
 
@@ -163,6 +253,17 @@ class NodeSet:
             r.seek(base + offset)
             self.nodes.append(NodeData(r))
         r.seek(resume)
+
+    def write(self, w: BinaryWriter):
+        base = w.tell()
+        write_dictionary(w, self.dict, lambda wr, v: wr.write_u32(v))
+        for i, node in enumerate(self.nodes):
+            self.dict.values()[i] = w.tell() - base
+            node.write(w)
+        end = w.tell()
+        w.seek(base)
+        write_dictionary(w, self.dict, lambda wr, v: wr.write_u32(v))
+        w.seek(end)
 
     def __len__(self) -> int:
         return len(self.nodes)
@@ -200,6 +301,33 @@ class Material:
             self.trans_t = r.read_fx32()
         if self.hasflag(MatFlag.EFFECTMTX):
             self.effect_mtx = r.read_fx32s(16)
+
+    def write(self, w: BinaryWriter):
+        w.write_u16(self.tag)
+        w.write_u16(self.size)
+        w.write_u32(self.diff_amb)
+        w.write_u32(self.spec_emi)
+        w.write_u32(self.poly_attr)
+        w.write_u32(self.poly_attr_mask)
+        w.write_u32(self.tex_image_param)
+        w.write_u32(self.tex_image_param_mask)
+        w.write_u16(self.tex_pltt_base)
+        w.write_u16(self.flag)
+        w.write_u16(self.orig_width)
+        w.write_u16(self.orig_height)
+        w.write_fx32(self.mag_w)
+        w.write_fx32(self.mag_h)
+        if not self.hasflag(MatFlag.TEXMTX_SCALE_ONE):
+            w.write_fx32(self.scale_s)
+            w.write_fx32(self.scale_t)
+        if not self.hasflag(MatFlag.TEXMTX_ROTATION_ZERO):
+            w.write_fx16(self.rot_sin)
+            w.write_fx16(self.rot_cos)
+        if not self.hasflag(MatFlag.TEXMTX_TRANSLATION_ZERO):
+            w.write_fx32(self.trans_s)
+            w.write_fx32(self.trans_t)
+        if self.hasflag(MatFlag.EFFECTMTX):
+            w.write_fx32s(self.effect_mtx)
 
     def hasflag(self, flag: MatFlag) -> bool:
         return _hasflag(self.flag, flag)
@@ -252,6 +380,42 @@ class MaterialSet:
             entry.materials = list(r.read_bytes(entry.mat_count))
             r.seek(start)
 
+    def write(self, w: BinaryWriter):
+        base = w.tell()
+        pos_tex_offset = w.tell()
+        w.write_u16(0)
+        pos_pltt_offset = w.tell()
+        w.write_u16(0)
+
+        write_dictionary(w, self.dict, lambda wr, v: wr.write_u32(v))
+        w.patch_u16(pos_tex_offset, w.tell() - base)
+        write_dictionary(w, self.dict_tex_to_mat, lambda wr, v: v.write(wr))
+        w.patch_u16(pos_pltt_offset, w.tell() - base)
+        write_dictionary(w, self.dict_pltt_to_mat, lambda wr, v: v.write(wr))
+
+        # Write Material lists and update entry offsets
+        for entry in self.dict_tex_to_mat.values():
+            entry.offset = w.tell() - base
+            w.write_bytes(bytes(entry.materials))
+        for entry in self.dict_pltt_to_mat.values():
+            entry.offset = w.tell() - base
+            w.write_bytes(bytes(entry.materials))
+        w.align(4)
+
+        # Update material offsets
+        for i, mat in enumerate(self.materials):
+            self.dict.data[i] = w.tell() - base
+            mat.write(w)
+
+        end = w.tell()
+
+        # Re-write the 3 dictionaries with their updated entries
+        w.seek(base + 4)
+        write_dictionary(w, self.dict, lambda wr, v: wr.write_u32(v))
+        write_dictionary(w, self.dict_tex_to_mat, lambda wr, v: v.write(wr))
+        write_dictionary(w, self.dict_pltt_to_mat, lambda wr, v: v.write(wr))
+        w.seek(end)
+
     def texture_name(self, mat: int) -> str | None:
         for name, entry in self.dict_tex_to_mat:
             if mat in entry.materials:
@@ -277,6 +441,11 @@ class TexToMatData:
         self.flags = r.read_u8()
         self.materials: list[int] = []  # Filled in by MaterialSet
 
+    def write(self, w: BinaryWriter):
+        w.write_u16(self.offset)
+        w.write_u8(self.mat_count)
+        w.write_u8(self.flags)
+
 
 class Shape:
     def __init__(self, r: BinaryReader):
@@ -291,6 +460,13 @@ class Shape:
         self.dl = r.read_bytes(self.dl_size)
         r.seek(resume)
 
+    def write(self, w: BinaryWriter):
+        w.write_u16(self.tag)
+        w.write_u16(self.size)
+        w.write_u32(self.flag)
+        w.write_u32(self.dl_offset)
+        w.write_u32(self.dl_size)
+
 
 class ShapeSet:
     def __init__(self, r: BinaryReader):
@@ -303,6 +479,27 @@ class ShapeSet:
             self.shapes.append(Shape(r))
         r.seek(resume)
 
+    def write(self, w: BinaryWriter):
+        base = w.tell()
+        write_dictionary(w, self.dict, lambda wr, v: wr.write_u32(v))
+        for i, shape in enumerate(self.shapes):
+            self.dict.data[i] = w.tell() - base
+            shape.write(w)
+
+        # Display-list bytes follow the shape descriptors
+        for i, shape in enumerate(self.shapes):
+            shape.dl_offset = w.tell() - base - self.dict.data[i]
+            shape.dl_size = len(shape.dl)
+            w.write_bytes(shape.dl)
+
+        end = w.tell()
+
+        # Re-write both dictionary and shapes with updated offsets/sizes
+        write_dictionary(w, self.dict, lambda wr, v: wr.write_u32(v))
+        for shape in self.shapes:
+            shape.write(w)
+        w.seek(end)
+
     def __len__(self) -> int:
         return len(self.shapes)
 
@@ -312,10 +509,18 @@ class Envelope:
         self.inv_m = r.read_fx32s(12)  # Row major 4x3 matrix
         self.inv_n = r.read_fx32s(9)  # Row major 3x3 matrix
 
+    def write(self, w: BinaryWriter):
+        w.write_fx32s(self.inv_m)
+        w.write_fx32s(self.inv_n)
+
 
 class EvpMatrices:
     def __init__(self, r: BinaryReader, node_count: int):
         self.m = [Envelope(r) for _ in range(node_count)]
+
+    def write(self, w: BinaryWriter):
+        for evp in self.m:
+            evp.write(w)
 
     def __len__(self) -> int:
         return len(self.m)

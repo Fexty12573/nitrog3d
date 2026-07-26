@@ -38,3 +38,36 @@ class NSBMD:
         if self.header.num_blocks > 1:  # TEX0 Block is always the second block, if there is one
             r.seek(self.header.block_offsets[1])
             self.tex_pltt_set = TEX0(r)
+
+    def write(self) -> bytes:
+        w = BinaryWriter()
+        h = self.header
+        sig = h.signature
+        if sig == "BTX0":
+            num_blocks = 1
+        else:
+            num_blocks = 2 if self.tex_pltt_set is not None else 1
+
+        w.write_str(sig)
+        w.write_u16(h.endianness)
+        w.write_u16(h.version)
+        pos_file_size = w.tell()
+        w.write_u32(0)
+        w.write_u16(h.header_size)
+        w.write_u16(num_blocks)
+        pos_block_table = w.tell()
+        for _ in range(num_blocks):
+            w.write_u32(0)
+
+        if sig == "BTX0":
+            w.patch_u32(pos_block_table, w.tell())
+            self.tex_pltt_set.write(w)
+        else:
+            w.patch_u32(pos_block_table, w.tell())
+            self.model_set.write(w)
+            if self.tex_pltt_set is not None:
+                w.patch_u32(pos_block_table + 4, w.tell())
+                self.tex_pltt_set.write(w)
+
+        w.patch_u32(pos_file_size, w.tell())
+        return w.get_bytes()

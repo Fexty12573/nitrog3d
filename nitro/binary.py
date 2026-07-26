@@ -96,7 +96,7 @@ class BinaryReader:
         raw = self.read_bytes(n)
         return raw.decode(encoding=encoding, errors="replace")
 
-    def read_name(self, n: int = 16) -> str:
+    def read_key(self, n: int = 16) -> str:
         """Read a fixed-length, 0-padded string"""
         return self.read_str(n).replace("\x00", "")
 
@@ -187,3 +187,19 @@ class BinaryWriter:
     def align(self, n: int, fill: int = 0):
         while self.pos % n != 0:
             self.write_u8(fill)
+
+    def patch_u16(self, offset: int, v: int):
+        pos = self.tell()
+        self.seek(offset)
+        self.write_u16(v)
+        self.seek(pos)
+
+    def patch_u32(self, offset: int, v: int):
+        pos = self.tell()
+        self.seek(offset)
+        self.write_u32(v)
+        self.seek(pos)
+
+    def write_key(self, s: str, n: int = 16):
+        raw = s.encode("ascii", errors="replace")[:n]
+        self.write_bytes(raw + b"\x00" * (n - len(raw)))
