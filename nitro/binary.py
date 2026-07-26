@@ -122,7 +122,7 @@ class BinaryWriter:
 
     @property
     def length(self) -> int:
-        return len(self.pos)
+        return len(self.buf)
 
     def get_bytes(self) -> bytes:
         return bytes(self.buf)
