@@ -232,3 +232,62 @@ class TestBinaryWriterBuffer:
         w.write_u32(1)
         w.align(4)
         assert w.tell() == 4
+
+
+class TestBinaryWriterKeys:
+    def test_write_key_pads_with_nulls(self):
+        w = BinaryWriter()
+        w.write_key("joint1", 16)
+        assert w.get_bytes() == b"joint1" + b"\x00" * 10
+
+    def test_write_key_truncates_when_too_long(self):
+        w = BinaryWriter()
+        w.write_key("0123456789abcdefXYZ", 16)
+        assert w.get_bytes() == b"0123456789abcdef"
+
+    def test_write_key_roundtrips_through_read_key(self):
+        w = BinaryWriter()
+        w.write_key("joint1", 16)
+        r = BinaryReader(w.get_bytes())
+        assert r.read_key(16) == "joint1"
+
+    def test_write_key_default_length_is_16(self):
+        w = BinaryWriter()
+        w.write_key("abc")
+        assert w.length == 16
+
+    def test_write_key_replaces_non_ascii_instead_of_raising(self):
+        w = BinaryWriter()
+        w.write_key("café", 8)
+        r = BinaryReader(w.get_bytes())
+        assert r.read_key(8).startswith("caf")
+
+
+class TestBinaryWriterPatch:
+    def test_patch_u16_writes_at_offset(self):
+        w = BinaryWriter()
+        w.write_u16(0)
+        w.write_u16(0xAAAA)
+        w.patch_u16(0, 0x1234)
+        assert struct.unpack("<HH", w.get_bytes()) == (0x1234, 0xAAAA)
+
+    def test_patch_u16_restores_position(self):
+        w = BinaryWriter()
+        w.write_u16(0)
+        w.write_u16(0)
+        w.patch_u16(0, 1)
+        assert w.tell() == 4
+
+    def test_patch_u32_writes_at_offset(self):
+        w = BinaryWriter()
+        w.write_u32(0)
+        w.write_u32(0xAAAAAAAA)
+        w.patch_u32(0, 0xDEADBEEF)
+        assert struct.unpack("<II", w.get_bytes()) == (0xDEADBEEF, 0xAAAAAAAA)
+
+    def test_patch_u32_restores_position(self):
+        w = BinaryWriter()
+        w.write_u32(0)
+        w.write_u32(0)
+        w.patch_u32(0, 1)
+        assert w.tell() == 8

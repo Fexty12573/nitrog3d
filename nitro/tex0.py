@@ -133,7 +133,8 @@ class TEX0:
         self.tex4x4_info.tex_pltt_idx_offset = pos_data + \
             len(tex_pool) + len(tex4x4_pool)
 
-        self.pltt_info.dict_offset = pos_pltt_dict
+        # TODO: take a closer look at this
+        self.pltt_info.dict_offset = 0
         self.pltt_info.pltt_size = len(pltt_pool)
         self.pltt_info.pltt_offset = pos_data + \
             len(tex_pool) + len(tex4x4_pool) + len(tex4x4_idx_pool)

@@ -1,7 +1,8 @@
 import struct
 
-from nitro.binary import BinaryReader
-from nitro.dictionary import read_dictionary
+from nitro.binary import BinaryReader, BinaryWriter
+from nitro.dictionary import (Dictionary, generate_patricia_tree,
+                              read_dictionary, write_dictionary)
 
 
 def make_dict_bytes(entry_payloads: list[bytes], names: list[str], data_size: int, revision: int = 0) -> bytes:
@@ -102,3 +103,89 @@ class TestDictionary:
         d = self.make()
         assert d.keys() == ["first", "second"]
         assert d.values() == [10, 20]
+
+
+class TestWriteDictionary:
+    def roundtrip(self, names, values, revision=0, data_size=4, tree_bytes=b""):
+        d = Dictionary(revision, names, list(values), data_size, tree_bytes)
+        w = BinaryWriter()
+        write_dictionary(w, d, lambda wr, v: wr.write_u32(v))
+        r = BinaryReader(w.get_bytes())
+        return read_dictionary(r, lambda rd: rd.read_u32())
+
+    def test_roundtrips_names_and_data(self):
+        out = self.roundtrip(["alpha", "beta", "gamma"], [1, 2, 3])
+        assert out.names == ["alpha", "beta", "gamma"]
+        assert out.data == [1, 2, 3]
+
+    def test_roundtrips_empty_dictionary(self):
+        out = self.roundtrip([], [])
+        assert out.names == []
+        assert out.data == []
+
+    def test_roundtrips_single_entry(self):
+        out = self.roundtrip(["only"], [42])
+        assert out.names == ["only"]
+        assert out.data == [42]
+
+    def test_roundtrips_many_entries(self):
+        names = [f"node{i:02d}" for i in range(20)]
+        values = list(range(20))
+        out = self.roundtrip(names, values)
+        assert out.names == names
+        assert out.data == values
+
+    def test_preserves_revision_and_data_size(self):
+        out = self.roundtrip(["a"], [1], revision=7, data_size=4)
+        assert out.revision == 7
+        assert out.data_size == 4
+
+    def test_regenerates_tree_when_stale(self):
+        # tree_bytes doesn't match entry_count, so it must be regenerated
+        # rather than written as-is (which would corrupt the tree on read-back).
+        out = self.roundtrip(["a", "b"], [1, 2], tree_bytes=b"\x00")
+        assert out.names == ["a", "b"]
+        assert out.data == [1, 2]
+
+    def test_keeps_existing_tree_when_size_matches(self):
+        # A correctly-sized tree_bytes is passed through unchanged instead of
+        # being regenerated.
+        tree = bytes(range((2 + 1) * 4))
+        out = self.roundtrip(["a", "b"], [1, 2], tree_bytes=tree)
+        assert out.tree_bytes == tree
+
+    def test_index_of_works_after_roundtrip(self):
+        out = self.roundtrip(["alpha", "beta", "gamma", "delta"], [10, 20, 30, 40])
+        assert out.index_of("gamma") == 2
+        assert out["gamma"] == 30
+
+    def test_respects_explicit_data_size_override(self):
+        d = Dictionary(0, ["a"], [1], data_size=4)
+        w = BinaryWriter()
+        write_dictionary(w, d, lambda wr, v: wr.write_u32(v), data_size=8)
+        out = read_dictionary(BinaryReader(w.get_bytes()), lambda rd: rd.read_u32())
+        assert out.data_size == 8
+        assert out.data == [1]
+
+
+class TestGeneratePatriciaTree:
+    def test_output_length_matches_entry_count(self):
+        tree = generate_patricia_tree(["a", "b", "c"])
+        assert len(tree) == (3 + 1) * 4
+
+    def test_empty_keys(self):
+        assert len(generate_patricia_tree([])) == 4
+
+    def test_single_key(self):
+        assert len(generate_patricia_tree(["only"])) == 8
+
+    def test_two_keys_does_not_crash(self):
+        # Regression: tree construction previously raised KeyError for any
+        # dictionary with 2 or more entries.
+        tree = generate_patricia_tree(["a", "b"])
+        assert len(tree) == (2 + 1) * 4
+
+    def test_does_not_crash_on_many_similar_keys(self):
+        keys = [f"joint_{i:03d}" for i in range(50)]
+        tree = generate_patricia_tree(keys)
+        assert len(tree) == (50 + 1) * 4
