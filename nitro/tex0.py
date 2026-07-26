@@ -206,7 +206,7 @@ class PlttInfo:
 
 class TexDictData:
     def __init__(self, r: BinaryReader):
-        self.offset = r.read_u16()
+        self.offset = r.read_u16() << 3
         self.tex_image_param = r.read_u16()
         self.s = 8 << ((self.tex_image_param >> 4) & 0x7)
         self.t = 8 << ((self.tex_image_param >> 7) & 0x7)

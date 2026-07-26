@@ -49,7 +49,7 @@ class MDL0:
         self.dict = read_dictionary(r, lambda rd: rd.read_u32())
         self.models: list[Model] = []
         for offset in self.dict.data:
-            r.seek(offset)
+            r.seek(base + offset)
             self.models.append(Model(r))
 
     def write(self, w: BinaryWriter):
@@ -495,6 +495,7 @@ class ShapeSet:
         end = w.tell()
 
         # Re-write both dictionary and shapes with updated offsets/sizes
+        w.seek(base)
         write_dictionary(w, self.dict, lambda wr, v: wr.write_u32(v))
         for shape in self.shapes:
             shape.write(w)
