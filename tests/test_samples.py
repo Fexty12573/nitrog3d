@@ -40,8 +40,8 @@ class TestRealSampleFiles:
         nsbmd = NSBMD(data)
         reparsed = NSBMD(nsbmd.write())
 
-        assert reparsed.header.signature == nsbmd.header.signature
-        assert reparsed.header.num_blocks == nsbmd.header.num_blocks
+        assert reparsed.container.signature == nsbmd.container.signature
+        assert reparsed.container.num_blocks == nsbmd.container.num_blocks
 
         if nsbmd.model_set is not None:
             assert reparsed.model_set.dict.names == nsbmd.model_set.dict.names

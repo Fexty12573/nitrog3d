@@ -1,4 +1,5 @@
 
+from __future__ import annotations
 from .binary import BinaryReader, BinaryWriter
 from collections.abc import Callable
 from typing import Any, TypeVar
