@@ -1,6 +1,7 @@
 
+from __future__ import annotations
 from .binary import FX16_SCALE, FX32_SCALE, sign_extend, read_u32_le
-import matrix as mat
+from . import matrix as mat
 import numpy as np
 from enum import IntEnum
 from dataclasses import dataclass
@@ -97,14 +98,16 @@ class GeometryBuilder:
         match self._prim_type:
             case PrimType.TRIANGLES:
                 self.num_triangles += len(verts) // 3
-                for (a, b, c) in batched(verts, 3):
-                    if c is not None:
-                        self.triangles.append((a, b, c))
+                # An incomplete trailing primitive is discarded, as on hardware
+                for group in batched(verts, 3):
+                    if len(group) == 3:
+                        self.triangles.append(group)
 
             case PrimType.QUADS:
                 self.num_quads += len(verts) // 4
-                for (a, b, c, d) in batched(verts, 4):
-                    if c is not None:
+                for group in batched(verts, 4):
+                    if len(group) == 4:
+                        a, b, c, d = group
                         self.triangles.append((a, b, c))
                         self.triangles.append((a, c, d))
             case PrimType.TRI_STRIP:
@@ -126,7 +129,7 @@ class GeometryBuilder:
                     self.triangles.append((a, c, d))
                     i += 2
 
-    def run_dl(self, dl: list[int]):
+    def run_dl(self, dl: bytes | bytearray):
         self._first_pos = None
         self._first_dir = None
         self._first_pos_ref = None
@@ -141,7 +144,7 @@ class GeometryBuilder:
             for cmd in cmds:
                 off = self._exec(cmd, dl, off)
 
-    def _exec(self, cmd: DlCmd, dl: list[int], off: int) -> int:
+    def _exec(self, cmd: DlCmd, dl: bytes | bytearray, off: int) -> int:
         match cmd:
             case DlCmd.NOP:
                 return off
@@ -285,11 +288,11 @@ class GeometryBuilder:
 
     def identity(self):
         if self.mtx_mode in (MtxMode.POSITION, MtxMode.POSITION_VECTOR):
-            self.cur_pos = np.identity()
+            self.cur_pos = np.identity(4)
         if self.mtx_mode == MtxMode.POSITION_VECTOR:
-            self.cur_dir = np.identity()
+            self.cur_dir = np.identity(4)
         if self.mtx_mode == MtxMode.TEXTURE:
-            self.cur_tex = np.identity()
+            self.cur_tex = np.identity(4)
 
     def _load(self, m: np.ndarray):
         if self.mtx_mode in (MtxMode.POSITION, MtxMode.POSITION_VECTOR):
@@ -305,38 +308,44 @@ class GeometryBuilder:
     def load_mtx43(self, vals: list[int]):
         self._load(mat.from4x3(_fx32list(vals)))
 
-    def _mul(self, m: np.ndarray):
+    def mul(self, m: np.ndarray):
         if self.mtx_mode in (MtxMode.POSITION, MtxMode.POSITION_VECTOR):
-            self.cur_pos = np.matmul(self.cur_pos, m)
+            self.cur_pos = np.dot(self.cur_pos, m)
         if self.mtx_mode == MtxMode.POSITION_VECTOR:
-            self.cur_dir = np.matmul(self.cur_dir, m)
+            self.cur_dir = np.dot(self.cur_dir, m)
         if self.mtx_mode == MtxMode.TEXTURE:
-            self.cur_tex = np.matmul(self.cur_tex, m)
+            self.cur_tex = np.dot(self.cur_tex, m)
 
     def mul_mtx44(self, vals: list[int]):
-        self._mul(mat.from4x4(_fx32list(vals)))
+        self.mul(mat.from4x4(_fx32list(vals)))
 
     def mul_mtx43(self, vals: list[int]):
-        self._mul(mat.from4x3(_fx32list(vals)))
+        self.mul(mat.from4x3(_fx32list(vals)))
 
     def mul_mtx33(self, vals: list[int]):
-        self._mul(mat.from3x3(_fx32list(vals)))
+        self.mul(mat.from3x3(_fx32list(vals)))
 
     def scale(self, sx: int, sy: int, sz: int):
-        m = mat.scale(_fx32(sx), _fx32(sy), _fx32(sz))
+        self.scale_vec(fx32(sx), fx32(sy), fx32(sz))
+
+    def scale_vec(self, x: float, y: float, z: float):
+        m = mat.scale(x, y, z)
         if self.mtx_mode in (MtxMode.POSITION, MtxMode.POSITION_VECTOR):
-            self.cur_pos = np.matmul(self.cur_pos, m)
+            self.cur_pos = np.dot(self.cur_pos, m)
         if self.mtx_mode == MtxMode.TEXTURE:
-            self.cur_tex = np.matmul(self.cur_tex, m)
+            self.cur_tex = np.dot(self.cur_tex, m)
 
     def translate(self, tx: int, ty: int, tz: int):
-        self._mul(mat.translate(_fx32(tx), _fx32(ty), _fx32(tz)))
+        self.translate_vec(fx32(tx), fx32(ty), fx32(tz))
+
+    def translate_vec(self, x: float, y: float, z: float):
+        self.mul(mat.translate(x, y, z))
 
     def color(self, rgb: int):
         self.last_col = _bgr555_to_float(rgb)
 
     def normal(self, packed: int):
-        nx = sign_extend(packed & 0x3FF) / 512.0
+        nx = sign_extend(packed & 0x3FF, 10) / 512.0
         ny = sign_extend((packed >> 10) & 0x3FF, 10) / 512.0
         nz = sign_extend((packed >> 20) & 0x3FF, 10) / 512.0
         n = mat.mul_no_translate((nx, ny, nz), self.cur_dir)
@@ -365,7 +374,7 @@ class GeometryBuilder:
 
     def tex_image_param(self, cmd: int):
         self.tex_width = 8 << ((cmd >> 20) & 7)
-        self.tex_height = 8 << ((cmd >> 17) & 7)
+        self.tex_height = 8 << ((cmd >> 23) & 7)
         self.tex_gen = TexGen((cmd >> 30) & 3)
 
     def begin(self, prim_type: PrimType):
@@ -379,9 +388,9 @@ class GeometryBuilder:
         self._emit_vertex(mat.mul(v, self.cur_pos))
 
     def vertex(self, cmd1: int, cmd2: int):
-        x = _fx16(cmd1)
-        y = _fx16(cmd1 >> 16)
-        z = _fx16(cmd2)
+        x = fx16(cmd1)
+        y = fx16(cmd1 >> 16)
+        z = fx16(cmd2)
         self._vertex((x, y, z))
 
     def vertex10(self, v: int):
@@ -391,13 +400,13 @@ class GeometryBuilder:
         self._vertex((x, y, z))
 
     def vertex_xy(self, v: int):
-        self._vertex((_fx16(v), _fx16(v >> 16), self.last_vtx[2]))
+        self._vertex((fx16(v), fx16(v >> 16), self.last_vtx[2]))
 
     def vertex_xz(self, v: int):
-        self._vertex((_fx16(v), self.last_vtx[1], _fx16(v >> 16)))
+        self._vertex((fx16(v), self.last_vtx[1], fx16(v >> 16)))
 
     def vertex_yz(self, v: int):
-        self._vertex((self.last_vtx[0], _fx16(v), _fx16(v >> 16)))
+        self._vertex((self.last_vtx[0], fx16(v), fx16(v >> 16)))
 
     def vertex_diff(self, v: int):
         dx = sign_extend(v & 0x3FF, 10) / FX16_SCALE
@@ -405,6 +414,12 @@ class GeometryBuilder:
         dz = sign_extend((v >> 20) & 0x3FF, 10) / FX16_SCALE
         self._vertex(
             (self.last_vtx[0] + dx, self.last_vtx[1] + dy, self.last_vtx[2] + dz))
+
+    def get_pos_mtx(self) -> np.ndarray:
+        return self._first_pos if self._first_pos is not None else self.cur_pos
+
+    def get_dir_mtx(self) -> np.ndarray:
+        return self._first_dir if self._first_dir is not None else self.cur_dir
 
 
 def _s16(v: int) -> int:
@@ -415,16 +430,16 @@ def _s32(v: int) -> int:
     return v - 0x100000000 if v >= 0x80000000 else v
 
 
-def _fx16(v: int) -> float:
+def fx16(v: int) -> float:
     return _s16(v) / FX16_SCALE
 
 
-def _fx32(v: int) -> float:
+def fx32(v: int) -> float:
     return _s32(v) / FX32_SCALE
 
 
 def _fx32list(vs: list[int]) -> list[float]:
-    return list(map(_fx32, vs))
+    return list(map(fx32, vs))
 
 
 def _expand5(v: int) -> int:

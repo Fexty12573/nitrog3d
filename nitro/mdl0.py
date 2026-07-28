@@ -1,5 +1,5 @@
 
-from .binary import BinaryReader, BinaryWriter
+from .binary import BinaryReader, BinaryWriter, FX16_SCALE
 from .dictionary import read_dictionary, write_dictionary
 from enum import IntEnum
 
@@ -241,6 +241,19 @@ class NodeData:
 
     def hasflag(self, flag: SrtFlag) -> bool:
         return _hasflag(self.flag, flag)
+
+    def pivot_idx(self) -> int:
+        return (self.flag & SrtFlag.PIVOT_IDX_MASK) >> 4
+
+    def translation(self) -> tuple[float, float, float]:
+        return (self.tx, self.ty, self.tz)
+
+    def rot_mtx(self) -> list[float]:
+        return [
+            self._00 / FX16_SCALE, self._01, self._02,
+            self._10, self._11, self._12,
+            self._20, self._21, self._22
+        ]
 
 
 class NodeSet:

@@ -205,7 +205,7 @@ class BinaryWriter:
         self.write_bytes(raw + b"\x00" * (n - len(raw)))
 
 
-def read_u32_le(buf: bytes | bytearray | list[int], offset: int) -> int:
+def read_u32_le(buf: bytes | bytearray, offset: int) -> int:
     """Read a 32-bit unsigned integer from a buffer at the given offset"""
     return struct.unpack_from("<I", buf, offset)[0]
 
