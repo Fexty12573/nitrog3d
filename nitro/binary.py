@@ -203,3 +203,13 @@ class BinaryWriter:
     def write_key(self, s: str, n: int = 16):
         raw = s.encode("ascii", errors="replace")[:n]
         self.write_bytes(raw + b"\x00" * (n - len(raw)))
+
+
+def read_u32_le(buf: bytes | bytearray | list[int], offset: int) -> int:
+    """Read a 32-bit unsigned integer from a buffer at the given offset"""
+    return struct.unpack_from("<I", buf, offset)[0]
+
+
+def sign_extend(v: int, bits: int) -> int:
+    mask = 1 << (bits - 1)
+    return (v & (mask - 1)) - (v & mask)
