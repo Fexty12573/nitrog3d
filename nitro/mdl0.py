@@ -1,4 +1,5 @@
 
+from __future__ import annotations
 from .binary import BinaryReader, BinaryWriter, FX16_SCALE
 from .dictionary import read_dictionary, write_dictionary
 from enum import IntEnum
@@ -69,6 +70,9 @@ class MDL0:
         w.seek(base + 8)
         write_dictionary(w, self.dict, lambda wr, v: wr.write_u32(v))
         w.seek(end)
+
+    def __iter__(self) -> zip[tuple[str, Model]]:
+        return zip(self.dict.keys(), self.models)
 
 
 class Model:

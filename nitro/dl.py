@@ -46,6 +46,9 @@ class Vertex:
     node: int
 
 
+Triangle = tuple[Vertex, Vertex, Vertex]
+
+
 class GeometryBuilder:
     def __init__(self):
         # TODO: Check if this is 31 or 32
@@ -70,7 +73,7 @@ class GeometryBuilder:
         self.cur_uv: tuple[float, float] | None = None
 
         self.current_bound_node = 0
-        self.triangles: list[tuple[Vertex, Vertex, Vertex]] = []
+        self.triangles: list[Triangle] = []
 
         self._prim_type: PrimType | None = None
         self._prim: list[Vertex] = []
