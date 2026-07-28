@@ -10,7 +10,7 @@ from nitro.dl import GeometryBuilder, MtxMode
 from nitro.mdl0 import (Envelope, EvpMatrices, MatFlag, Material, MaterialSet,
                         Model, ModelInfo, NodeData, NodeSet, Shape, ShapeSet,
                         SrtFlag)
-from nitro.sbc import SbcCmd, SbcFlag, SbcInterpreter
+from nitro.sbc import SbcCmd, SbcOpt, SbcInterpreter
 from tests.test_dl import ROT_Z90, tri_dl
 from tests.test_mdl0 import (make_material_bytes, make_model_info_bytes,
                              make_node_bytes)
@@ -90,15 +90,13 @@ def interpret(sbc: bytes, *, mat_tex_dims=None, builder=None, **kwargs) -> SbcIn
     return interp
 
 
-def nodedesc(node_id: int, flag=SbcFlag.F000, store=0, restore=0, parent=0) -> bytes:
+def nodedesc(node_id: int, flag=SbcOpt.NONE, store=0, restore=0, parent=0) -> bytes:
     """SBC_NODEDESC: opcode, node id, parent id, scale-compensate, [store], [restore]."""
     out = bytes([SbcCmd.NODEDESC | flag, node_id, parent, 0])
-    if flag == SbcFlag.F001:
+    if flag & SbcOpt.STORE:
         out += bytes([store])
-    elif flag == SbcFlag.F010:
+    if flag & SbcOpt.RESTORE:
         out += bytes([restore])
-    elif flag == SbcFlag.F011:
-        out += bytes([store, restore])
     return out
 
 
@@ -178,39 +176,39 @@ class TestNodeDesc:
         assert interp.node_parent == [-1, 0]
 
     def test_store_flag_maps_stack_slot_to_node(self):
-        sbc = nodedesc(0, SbcFlag.F001, store=5) + bytes([SbcCmd.RET])
+        sbc = nodedesc(0, SbcOpt.STORE, store=5) + bytes([SbcCmd.RET])
         interp = interpret(sbc)
         assert interp.stack_to_node == {5: 0}
 
     def test_store_flag_writes_the_matrix_stack(self):
         b = GeometryBuilder()
-        sbc = nodedesc(0, SbcFlag.F001, store=5) + bytes([SbcCmd.RET])
+        sbc = nodedesc(0, SbcOpt.STORE, store=5) + bytes([SbcCmd.RET])
         interpret(sbc, builder=b)
         assert b.pos_stack[5] is b.cur_pos
 
     def test_restore_flag_reparents_to_the_stored_node(self):
-        sbc = (nodedesc(0, SbcFlag.F001, store=3)   # stack 3 -> node 0
+        sbc = (nodedesc(0, SbcOpt.STORE, store=3)   # stack 3 -> node 0
                + nodedesc(1)                        # current becomes node 1
-               + nodedesc(2, SbcFlag.F010, restore=3)
+               + nodedesc(2, SbcOpt.RESTORE, restore=3)
                + bytes([SbcCmd.RET]))
         interp = interpret(sbc, nodes=[node(), node(), node()])
         # node 2's parent is whatever stack slot 3 held, i.e. node 0
         assert interp.node_parent == [-1, 0, 0]
 
     def test_store_and_restore_flag_reads_both_operands(self):
-        sbc = (nodedesc(0, SbcFlag.F001, store=3)
+        sbc = (nodedesc(0, SbcOpt.STORE, store=3)
                + nodedesc(1)
-               + nodedesc(2, SbcFlag.F011, store=9, restore=3)
+               + nodedesc(2, SbcOpt.STORE | SbcOpt.RESTORE, store=9, restore=3)
                + bytes([SbcCmd.RET]))
         interp = interpret(sbc, nodes=[node(), node(), node()])
         assert interp.node_parent[2] == 0
         assert interp.stack_to_node == {3: 0, 9: 2}
 
     @pytest.mark.parametrize("flag,length", [
-        (SbcFlag.F000, 4),
-        (SbcFlag.F001, 5),
-        (SbcFlag.F010, 5),
-        (SbcFlag.F011, 6),
+        (SbcOpt.NONE, 4),
+        (SbcOpt.STORE, 5),
+        (SbcOpt.RESTORE, 5),
+        (SbcOpt.STORE | SbcOpt.RESTORE, 6),
     ])
     def test_operand_length_per_flag(self, flag, length):
         # A wrong length desynchronises the stream, so the trailing NODEDESC
@@ -396,7 +394,7 @@ class TestPivotRotation:
 
 class TestMtx:
     def test_restores_matrix_and_current_node(self):
-        sbc = (nodedesc(0, SbcFlag.F001, store=5)
+        sbc = (nodedesc(0, SbcOpt.STORE, store=5)
                + nodedesc(1)
                + bytes([SbcCmd.MTX, 5])
                + bytes([SbcCmd.RET]))
@@ -535,7 +533,7 @@ class TestPosScale:
 
     def test_flagged_uses_inverse_pos_scale(self):
         b = GeometryBuilder()
-        interpret(bytes([SbcCmd.POSSCALE | SbcFlag.F001, SbcCmd.RET]), builder=b,
+        interpret(bytes([SbcCmd.POSSCALE | SbcOpt.STORE, SbcCmd.RET]), builder=b,
                   pos_scale=2.0, inv_pos_scale=0.5)
         assert mat.mul((1.0, 1.0, 1.0), b.cur_pos) == pytest.approx(
             (0.5, 0.5, 0.5))
@@ -549,10 +547,10 @@ class TestPosScale:
 class TestBillboard:
     @pytest.mark.parametrize("cmd", [SbcCmd.BB, SbcCmd.BBY])
     @pytest.mark.parametrize("flag,length", [
-        (SbcFlag.F000, 2),
-        (SbcFlag.F001, 3),
-        (SbcFlag.F010, 3),
-        (SbcFlag.F011, 4),
+        (SbcOpt.NONE, 2),
+        (SbcOpt.STORE, 3),
+        (SbcOpt.RESTORE, 3),
+        (SbcOpt.STORE | SbcOpt.RESTORE, 4),
     ])
     def test_operand_length_per_flag(self, cmd, flag, length):
         head = bytes([cmd | flag, 0, 1, 1])[:length]
@@ -563,15 +561,15 @@ class TestBillboard:
     @pytest.mark.parametrize("cmd", [SbcCmd.BB, SbcCmd.BBY])
     def test_store_flag_maps_stack_slot_to_current_node(self, cmd):
         sbc = nodedesc(
-            0) + bytes([cmd | SbcFlag.F001, 0, 6]) + bytes([SbcCmd.RET])
+            0) + bytes([cmd | SbcOpt.STORE, 0, 6]) + bytes([SbcCmd.RET])
         interp = interpret(sbc)
         assert interp.stack_to_node == {6: 0}
 
     @pytest.mark.parametrize("cmd", [SbcCmd.BB, SbcCmd.BBY])
     def test_restore_flag_updates_current_node(self, cmd):
-        sbc = (nodedesc(0, SbcFlag.F001, store=2)
+        sbc = (nodedesc(0, SbcOpt.STORE, store=2)
                + nodedesc(1)
-               + bytes([cmd | SbcFlag.F010, 0, 2])
+               + bytes([cmd | SbcOpt.RESTORE, 0, 2])
                + bytes([SbcCmd.RET]))
         interp = interpret(sbc, nodes=[node(), node()])
         assert interp.current_node == 0
@@ -740,14 +738,10 @@ class TestCallDl:
 
 class TestSbcFlags:
     @pytest.mark.parametrize("flag,bits", [
-        (SbcFlag.F000, 0b000),
-        (SbcFlag.F001, 0b001),
-        (SbcFlag.F010, 0b010),
-        (SbcFlag.F011, 0b011),
-        (SbcFlag.F100, 0b100),
-        (SbcFlag.F101, 0b101),
-        (SbcFlag.F110, 0b110),
-        (SbcFlag.F111, 0b111),
+        (SbcOpt.NONE, 0b000),
+        (SbcOpt.STORE, 0b001),
+        (SbcOpt.RESTORE, 0b010),
+        (SbcOpt.STORE | SbcOpt.RESTORE, 0b011),
     ])
     def test_flag_values_are_the_bit_pattern_shifted_into_the_mask(self, flag, bits):
         assert flag == bits << 5

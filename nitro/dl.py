@@ -6,6 +6,7 @@ import numpy as np
 from enum import IntEnum
 from dataclasses import dataclass
 from itertools import batched
+from typing import Callable
 
 
 class MtxMode(IntEnum):
@@ -29,19 +30,27 @@ class PrimType(IntEnum):
     QUAD_STRIP = 3
 
 
+_NORMAL_SCALE = 1.0 / 512.0
+_VERTEX10_SCALE = 1.0 / 64.0
+_TEXCOORD_SCALE = 1.0 / 16.0
+_MTX_STACK_MASK = 0x1F
+_ALPHA_MASK = 0x1F
+
+
 @dataclass(slots=True)
 class Vertex:
     pos: tuple[float, float, float]
-    normal: tuple[float, float]
-    uv: tuple[float, float]
+    normal: tuple[float, float, float] | None
+    uv: tuple[float, float] | None
     color: tuple[float, float, float]
     node: int
 
 
 class GeometryBuilder:
     def __init__(self):
-        self.pos_stack = [np.identity(4) for _ in range(31)]
-        self.dir_stack = [np.identity(4) for _ in range(31)]
+        # TODO: Check if this is 31 or 32
+        self.pos_stack = [np.identity(4) for _ in range(32)]
+        self.dir_stack = [np.identity(4) for _ in range(32)]
         self.cur_pos = np.identity(4)
         self.cur_dir = np.identity(4)
         self.cur_tex = np.identity(4)
@@ -75,6 +84,10 @@ class GeometryBuilder:
         self._first_pos_ref = None
         self._single_matrix = True
 
+    @property
+    def single_matrix(self):
+        return self._single_matrix
+
     def _emit_vertex(self, v: tuple[float, float, float]):
         if self._first_pos is None:
             self._first_pos = np.copy(self.cur_pos)
@@ -88,7 +101,7 @@ class GeometryBuilder:
         self._prim.append(Vertex(v, self.cur_nrm,
                           self.cur_uv, self.last_col, self.current_bound_node))
 
-    def _flush_primitive(self):
+    def _flush_primitives(self):
         verts = self._prim
         self._prim = []
 
@@ -144,185 +157,77 @@ class GeometryBuilder:
             for cmd in cmds:
                 off = self._exec(cmd, dl, off)
 
-    def _exec(self, cmd: DlCmd, dl: bytes | bytearray, off: int) -> int:
-        match cmd:
-            case DlCmd.NOP:
-                return off
-            case DlCmd.MTX_MODE:
-                self.mtx_mode = MtxMode(read_u32_le(dl, off))
-                return off + 4
-            case DlCmd.PUSH_MTX:
-                self.push_mtx()
-                return off
-            case DlCmd.POP_MTX:
-                self.pop_mtx(read_u32_le(dl, off))
-                return off + 4
-            case DlCmd.STORE_MTX:
-                self.store_mtx(read_u32_le(dl, off))
-                return off + 4
-            case DlCmd.RESTORE_MTX:
-                self.restore_mtx(read_u32_le(dl, off))
-                return off + 4
-            case DlCmd.IDENTITY:
-                self.identity()
-                return off
-            case DlCmd.LOAD_MTX44:
-                self.load_mtx44([read_u32_le(dl, off + i * 4)
-                                for i in range(16)])
-                return off + 64
-            case DlCmd.LOAD_MTX43:
-                self.load_mtx43([read_u32_le(dl, off + i * 4)
-                                for i in range(12)])
-                return off + 48
-            case DlCmd.MUL_MTX44:
-                self.mul_mtx44([read_u32_le(dl, off + i * 4)
-                               for i in range(16)])
-                return off + 64
-            case DlCmd.MUL_MTX43:
-                self.mul_mtx43([read_u32_le(dl, off + i * 4)
-                               for i in range(12)])
-                return off + 48
-            case DlCmd.MUL_MTX33:
-                self.mul_mtx33([read_u32_le(dl, off + i * 4)
-                               for i in range(9)])
-                return off + 36
-            case DlCmd.SCALE:
-                self.scale(read_u32_le(dl, off), read_u32_le(
-                    dl, off + 4), read_u32_le(dl, off + 8))
-                return off + 12
-            case DlCmd.TRANSLATE:
-                self.translate(read_u32_le(dl, off), read_u32_le(
-                    dl, off + 4), read_u32_le(dl, off + 8))
-                return off + 12
-            case DlCmd.COLOR:
-                self.color(read_u32_le(dl, off))
-                return off + 4
-            case DlCmd.NORMAL:
-                self.normal(read_u32_le(dl, off))
-                return off + 4
-            case DlCmd.TEXCOORD:
-                self.texcoord(read_u32_le(dl, off))
-                return off + 4
-            case DlCmd.VERTEX:
-                self.vertex(read_u32_le(dl, off), read_u32_le(dl, off + 4))
-                return off + 8
-            case DlCmd.VERTEX_10:
-                self.vertex10(read_u32_le(dl, off))
-                return off + 4
-            case DlCmd.VERTEX_XY:
-                self.vertex_xy(read_u32_le(dl, off))
-                return off + 4
-            case DlCmd.VERTEX_XZ:
-                self.vertex_xz(read_u32_le(dl, off))
-                return off + 4
-            case DlCmd.VERTEX_YZ:
-                self.vertex_yz(read_u32_le(dl, off))
-                return off + 4
-            case DlCmd.VERTEX_DIFF:
-                self.vertex_diff(read_u32_le(dl, off))
-                return off + 4
-            case DlCmd.POLY_ATTR:
-                self.next_poly_attr = read_u32_le(dl, off)
-                return off + 4
-            case DlCmd.TEX_IMG_PARAM:
-                self.tex_image_param(read_u32_le(dl, off))
-                return off + 4
-            case DlCmd.TEX_PLTT_BASE:
-                return off + 4
-            case DlCmd.MAT_COL_0:
-                return off + 4
-            case DlCmd.MAT_COL_1:
-                return off + 4
-            case DlCmd.LIGHT_VEC:
-                return off + 4
-            case DlCmd.LIGHT_COL:
-                return off + 4
-            case DlCmd.SHININESS:
-                return off + 128
-            case DlCmd.BEGIN:
-                self.begin(PrimType(read_u32_le(dl, off)))
-                return off + 4
-            case DlCmd.END:
-                self._flush_primitive()
-                return off
-            case DlCmd.SWAP_BUFFERS:
-                return off + 4
-            case DlCmd.VIEWPORT:
-                return off + 4
-            case DlCmd.BOXTEST:
-                return off + 12
-            case DlCmd.POSTEST:
-                return off + 8
-            case DlCmd.VECTEST:
-                return off + 4
-            case _:
-                return off
+    def _exec(self, cmd: int, dl: bytes | bytearray, off: int) -> int:
+        words, handler = _DL_HANDLERS.get(cmd, (0, None))
+        if handler is not None:
+            params = [read_u32_le(dl, off + i * 4) for i in range(words)]
+            getattr(self, handler)(*params)
+
+        return off + words * 4
+
+    def set_mtx_mode(self, mode: MtxMode | int):
+        self.mtx_mode = MtxMode(mode)
+
+    def _targets(self, *, include_dir=True) -> tuple[str, ...]:
+        match self.mtx_mode:
+            case MtxMode.POSITION: return ("cur_pos",)
+            case MtxMode.POSITION_VECTOR: return ("cur_pos", "cur_dir") if include_dir else ("cur_pos",)
+            case MtxMode.TEXTURE: return ("cur_tex",)
+            case _: return ()
+
+    def _apply(self, fn: Callable[[np.ndarray], np.ndarray], *, include_dir=True):
+        for name in self._targets(include_dir=include_dir):
+            setattr(self, name, fn(getattr(self, name)))
+
+    def _stack_targets(self) -> tuple[tuple[str, list[np.ndarray]], ...]:
+        match self.mtx_mode:
+            case MtxMode.POSITION: return (("cur_pos", self.pos_stack),)
+            case MtxMode.POSITION_VECTOR:
+                return (("cur_pos", self.pos_stack), ("cur_dir", self.dir_stack))
+            case _: return ()
 
     def push_mtx(self):
-        if self.mtx_mode in (MtxMode.POSITION, MtxMode.POSITION_VECTOR):
-            self.pos_stack[self.stack_ptr] = self.cur_pos
-        if self.mtx_mode == MtxMode.POSITION_VECTOR:
-            self.dir_stack[self.stack_ptr] = self.cur_dir
+        for name, stack in self._stack_targets():
+            stack[self.stack_ptr] = getattr(self, name)
         self.stack_ptr += 1
 
     def pop_mtx(self, cmd: int):
         self.stack_ptr -= sign_extend(cmd & 0x3F, 6)
-        if self.mtx_mode in (MtxMode.POSITION, MtxMode.POSITION_VECTOR):
-            self.cur_pos = self.pos_stack[self.stack_ptr]
-        if self.mtx_mode == MtxMode.POSITION_VECTOR:
-            self.cur_dir = self.dir_stack[self.stack_ptr]
+        for name, stack in self._stack_targets():
+            setattr(self, name, stack[self.stack_ptr])
 
     def store_mtx(self, index: int):
-        index &= 31
-        if self.mtx_mode in (MtxMode.POSITION, MtxMode.POSITION_VECTOR):
-            self.pos_stack[index] = self.cur_pos
-        if self.mtx_mode == MtxMode.POSITION_VECTOR:
-            self.dir_stack[index] = self.cur_dir
+        index &= _MTX_STACK_MASK
+        for name, stack in self._stack_targets():
+            stack[index] = getattr(self, name)
 
     def restore_mtx(self, index: int):
-        index &= 31
-        if self.mtx_mode in (MtxMode.POSITION, MtxMode.POSITION_VECTOR):
-            self.cur_pos = self.pos_stack[index]
-        if self.mtx_mode == MtxMode.POSITION_VECTOR:
-            self.cur_dir = self.dir_stack[index]
+        index &= _MTX_STACK_MASK
+        for name, stack in self._stack_targets():
+            setattr(self, name, stack[index])
 
     def identity(self):
-        if self.mtx_mode in (MtxMode.POSITION, MtxMode.POSITION_VECTOR):
-            self.cur_pos = np.identity(4)
-        if self.mtx_mode == MtxMode.POSITION_VECTOR:
-            self.cur_dir = np.identity(4)
-        if self.mtx_mode == MtxMode.TEXTURE:
-            self.cur_tex = np.identity(4)
+        self._apply(lambda _: np.identity(4))
 
     def _load(self, m: np.ndarray):
-        if self.mtx_mode in (MtxMode.POSITION, MtxMode.POSITION_VECTOR):
-            self.cur_pos = m
-        if self.mtx_mode == MtxMode.POSITION_VECTOR:
-            self.cur_dir = m
-        if self.mtx_mode == MtxMode.TEXTURE:
-            self.cur_tex = m
+        self._apply(lambda _: m)
 
-    def load_mtx44(self, vals: list[int]):
+    def load_mtx44(self, *vals: int):
         self._load(mat.from4x4(_fx32list(vals)))
 
-    def load_mtx43(self, vals: list[int]):
+    def load_mtx43(self, *vals: int):
         self._load(mat.from4x3(_fx32list(vals)))
 
     def mul(self, m: np.ndarray):
-        if self.mtx_mode in (MtxMode.POSITION, MtxMode.POSITION_VECTOR):
-            self.cur_pos = np.dot(m, self.cur_pos)
-        if self.mtx_mode == MtxMode.POSITION_VECTOR:
-            self.cur_dir = np.dot(m, self.cur_dir)
-        if self.mtx_mode == MtxMode.TEXTURE:
-            self.cur_tex = np.dot(m, self.cur_tex)
+        self._apply(lambda cur: np.dot(m, cur))
 
-    def mul_mtx44(self, vals: list[int]):
+    def mul_mtx44(self, *vals: int):
         self.mul(mat.from4x4(_fx32list(vals)))
 
-    def mul_mtx43(self, vals: list[int]):
+    def mul_mtx43(self, *vals: int):
         self.mul(mat.from4x3(_fx32list(vals)))
 
-    def mul_mtx33(self, vals: list[int]):
+    def mul_mtx33(self, *vals: int):
         self.mul(mat.from3x3(_fx32list(vals)))
 
     def scale(self, sx: int, sy: int, sz: int):
@@ -331,10 +236,7 @@ class GeometryBuilder:
     def scale_vec(self, x: float, y: float, z: float):
         # Skip the direction matrix even in POSITION_VECTOR mode
         m = mat.scale(x, y, z)
-        if self.mtx_mode in (MtxMode.POSITION, MtxMode.POSITION_VECTOR):
-            self.cur_pos = np.dot(m, self.cur_pos)
-        if self.mtx_mode == MtxMode.TEXTURE:
-            self.cur_tex = np.dot(m, self.cur_tex)
+        self._apply(lambda cur: np.dot(m, cur), include_dir=False)
 
     def translate(self, tx: int, ty: int, tz: int):
         self.translate_vec(fx32(tx), fx32(ty), fx32(tz))
@@ -346,9 +248,7 @@ class GeometryBuilder:
         self.last_col = _bgr555_to_float(rgb)
 
     def normal(self, packed: int):
-        nx = sign_extend(packed & 0x3FF, 10) / 512.0
-        ny = sign_extend((packed >> 10) & 0x3FF, 10) / 512.0
-        nz = sign_extend((packed >> 20) & 0x3FF, 10) / 512.0
+        (nx, ny, nz) = tuple(map(lambda x: x * _NORMAL_SCALE, _unpack3x10(packed)))
         n = mat.mul_no_translate((nx, ny, nz), self.cur_dir)
         self.cur_nrm = n
         if self.tex_gen == TexGen.NORMAL:
@@ -360,8 +260,8 @@ class GeometryBuilder:
             self.cur_uv = (u, v)
 
     def texcoord(self, packed: int):
-        s = _s16(packed) / 16.0
-        t = _s16(packed >> 16) / 16.0
+        s = _s16(packed) * _TEXCOORD_SCALE
+        t = _s16(packed >> 16) * _TEXCOORD_SCALE
         self.last_tex = (s, t)
         if self.tex_gen == TexGen.NONE:
             self.cur_uv = (s / self.tex_width, t / self.tex_height)
@@ -378,11 +278,14 @@ class GeometryBuilder:
         self.tex_height = 8 << ((cmd >> 23) & 7)
         self.tex_gen = TexGen((cmd >> 30) & 3)
 
-    def begin(self, prim_type: PrimType):
-        self._flush_primitive()
-        self._prim_type = prim_type
+    def begin(self, prim_type: PrimType | int):
+        self._flush_primitives()
+        self._prim_type = PrimType(prim_type)
         self._prim = []
-        self.alpha = (self.next_poly_attr >> 16) & 31
+        self.alpha = (self.next_poly_attr >> 16) & _ALPHA_MASK
+
+    def end(self):
+        self._flush_primitives()
 
     def _vertex(self, v: tuple[float, float, float]):
         self.last_vtx = v
@@ -395,9 +298,7 @@ class GeometryBuilder:
         self._vertex((x, y, z))
 
     def vertex10(self, v: int):
-        x = sign_extend(v & 0x3FF, 10) / 64.0
-        y = sign_extend((v >> 10) & 0x3FF, 10) / 64.0
-        z = sign_extend((v >> 20) & 0x3FF, 10) / 64.0
+        (x, y, z) = tuple(map(lambda x: x * _VERTEX10_SCALE, _unpack3x10(v)))
         self._vertex((x, y, z))
 
     def vertex_xy(self, v: int):
@@ -410,11 +311,12 @@ class GeometryBuilder:
         self._vertex((self.last_vtx[0], fx16(v), fx16(v >> 16)))
 
     def vertex_diff(self, v: int):
-        dx = sign_extend(v & 0x3FF, 10) / FX16_SCALE
-        dy = sign_extend((v >> 10) & 0x3FF, 10) / FX16_SCALE
-        dz = sign_extend((v >> 20) & 0x3FF, 10) / FX16_SCALE
+        (dx, dy, dz) = tuple(map(lambda x: x / FX16_SCALE, _unpack3x10(v)))
         self._vertex(
             (self.last_vtx[0] + dx, self.last_vtx[1] + dy, self.last_vtx[2] + dz))
+
+    def poly_attr(self, cmd: int):
+        self.next_poly_attr = cmd
 
     def get_pos_mtx(self) -> np.ndarray:
         return self._first_pos if self._first_pos is not None else self.cur_pos
@@ -428,7 +330,7 @@ def _s16(v: int) -> int:
 
 
 def _s32(v: int) -> int:
-    return v - 0x100000000 if v >= 0x80000000 else v
+    return sign_extend(v & 0xFFFFFFFF, 32)
 
 
 def fx16(v: int) -> float:
@@ -445,6 +347,14 @@ def _fx32list(vs: list[int]) -> list[float]:
 
 def _expand5(v: int) -> int:
     return (v * 255 + 15) // 31
+
+
+def _unpack3x10(v: int) -> tuple[int, int, int]:
+    return (
+        sign_extend(v & 0x3FF, 10),
+        sign_extend((v >> 10) & 0x3FF, 10),
+        sign_extend((v >> 20) & 0x3FF, 10)
+    )
 
 
 def _bgr555_to_float(rgb: int) -> tuple[float, float, float]:
@@ -493,3 +403,46 @@ class DlCmd(IntEnum):
     BOXTEST = 0x70
     POSTEST = 0x71
     VECTEST = 0x72
+
+
+# CMD -> (words, handler, pass as list)
+_DL_HANDLERS: dict[DlCmd, tuple[int, str | None]] = {
+    DlCmd.NOP: (0, None),
+    DlCmd.MTX_MODE: (1, "set_mtx_mode"),
+    DlCmd.PUSH_MTX: (0, "push_mtx"),
+    DlCmd.POP_MTX: (1, "pop_mtx"),
+    DlCmd.STORE_MTX: (1, "store_mtx"),
+    DlCmd.RESTORE_MTX: (1, "restore_mtx"),
+    DlCmd.IDENTITY: (0, "identity"),
+    DlCmd.LOAD_MTX44: (16, "load_mtx44"),
+    DlCmd.LOAD_MTX43: (12, "load_mtx43"),
+    DlCmd.MUL_MTX44: (16, "mul_mtx44"),
+    DlCmd.MUL_MTX43: (12, "mul_mtx43"),
+    DlCmd.MUL_MTX33: (9, "mul_mtx33"),
+    DlCmd.SCALE: (3, "scale"),
+    DlCmd.TRANSLATE: (3, "translate"),
+    DlCmd.COLOR: (1, "color"),
+    DlCmd.NORMAL: (1, "normal"),
+    DlCmd.TEXCOORD: (1, "texcoord"),
+    DlCmd.VERTEX: (2, "vertex"),
+    DlCmd.VERTEX_10: (1, "vertex10"),
+    DlCmd.VERTEX_XY: (1, "vertex_xy"),
+    DlCmd.VERTEX_XZ: (1, "vertex_xz"),
+    DlCmd.VERTEX_YZ: (1, "vertex_yz"),
+    DlCmd.VERTEX_DIFF: (1, "vertex_diff"),
+    DlCmd.POLY_ATTR: (1, "poly_attr"),
+    DlCmd.TEX_IMG_PARAM: (1, "tex_image_param"),
+    DlCmd.TEX_PLTT_BASE: (1, None),
+    DlCmd.MAT_COL_0: (1, None),
+    DlCmd.MAT_COL_1: (1, None),
+    DlCmd.LIGHT_VEC: (1, None),
+    DlCmd.LIGHT_COL: (1, None),
+    DlCmd.SHININESS: (32, None),
+    DlCmd.BEGIN: (1, "begin"),
+    DlCmd.END: (0, "end"),
+    DlCmd.SWAP_BUFFERS: (1, None),
+    DlCmd.VIEWPORT: (1, None),
+    DlCmd.BOXTEST: (3, None),
+    DlCmd.POSTEST: (2, None),
+    DlCmd.VECTEST: (1, None),
+}

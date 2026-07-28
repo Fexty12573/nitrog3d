@@ -798,6 +798,18 @@ class TestBindMatrixTracking:
         assert b._first_pos is not None
 
 
+def assert_trailing_triangle_intact(b: GeometryBuilder, cmd):
+    """The triangle after the command under test must be byte-for-byte intact.
+
+    Checking the count alone is too weak: a desynchronised stream can still
+    yield one triangle, just assembled from the wrong bytes.
+    """
+    assert len(b.triangles) == 1, f"{cmd!r} desynchronised the list"
+    assert [v.pos for v in b.triangles[0]] == pytest.approx(
+        [(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0)]
+    ), f"{cmd!r} desynchronised the list"
+
+
 class TestCommandLengths:
     """Every command must consume exactly its operand bytes.
 
@@ -855,7 +867,7 @@ class TestCommandLengths:
             (DlCmd.VERTEX, p_vertex(0.0, 1.0, 0.0)),
             (DlCmd.END, b""),
         ))
-        assert len(b.triangles) == 1, f"{cmd!r} desynchronised the list"
+        assert_trailing_triangle_intact(b, cmd)
 
     def test_unknown_opcode_is_skipped_without_operands(self):
         b = GeometryBuilder()
@@ -867,7 +879,7 @@ class TestCommandLengths:
             (DlCmd.VERTEX, p_vertex(0.0, 1.0, 0.0)),
             (DlCmd.END, b""),
         ))
-        assert len(b.triangles) == 1
+        assert_trailing_triangle_intact(b, 0x7F)
 
     def test_four_commands_share_one_word(self):
         # Exercises the packing rule directly: 4 opcodes, then 4 operand blocks.

@@ -242,8 +242,9 @@ class NodeData:
     def hasflag(self, flag: SrtFlag) -> bool:
         return _hasflag(self.flag, flag)
 
-    def pivot_idx(self) -> int:
-        return (self.flag & SrtFlag.PIVOT_IDX_MASK) >> 4
+    def pivot_idx(self) -> tuple[int, int]:
+        idx = (self.flag & SrtFlag.PIVOT_IDX_MASK) >> 4
+        return (idx // 3, idx % 3)
 
     def translation(self) -> tuple[float, float, float]:
         return (self.tx, self.ty, self.tz)

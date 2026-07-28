@@ -16,7 +16,7 @@ def from4x3(vals: list[float], col3: list[float] = [0.0, 0.0, 0.0, 1.0]) -> np.n
     return m
 
 
-def from3x3(vals: list[float], col3: list[float] = [0.0, 0.0, 0.0], row3: list[float] = [0.0, 0.0, 0.0, 1.0]) -> np.ndarray:
+def from3x3(vals: list[float] | np.ndarray, col3: list[float] = [0.0, 0.0, 0.0], row3: list[float] = [0.0, 0.0, 0.0, 1.0]) -> np.ndarray:
     m = np.array(vals).reshape(3, 3)
     m = np.hstack((m, np.array(col3).reshape(3, 1)))
     m = np.vstack((m, np.array(row3).reshape(1, 4)))
