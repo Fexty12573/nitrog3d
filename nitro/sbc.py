@@ -238,8 +238,8 @@ class SbcInterpreter:
             if self.evp is not None and evp_idx < len(self.evp.m):
                 inv_m = mat.from4x3(self.evp.m[evp_idx].inv_m)
                 inv_n = mat.from3x3(self.evp.m[evp_idx].inv_n)
-                m_term = np.dot(b.pos_stack[stack_idx], inv_m).flatten()
-                n_term = np.dot(b.dir_stack[stack_idx], inv_n).flatten()
+                m_term = np.dot(inv_m, b.pos_stack[stack_idx]).flatten()
+                n_term = np.dot(inv_n, b.dir_stack[stack_idx]).flatten()
             else:
                 m_term = b.pos_stack[stack_idx].flatten()
                 n_term = b.dir_stack[stack_idx].flatten()

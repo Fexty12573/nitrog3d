@@ -310,11 +310,11 @@ class GeometryBuilder:
 
     def mul(self, m: np.ndarray):
         if self.mtx_mode in (MtxMode.POSITION, MtxMode.POSITION_VECTOR):
-            self.cur_pos = np.dot(self.cur_pos, m)
+            self.cur_pos = np.dot(m, self.cur_pos)
         if self.mtx_mode == MtxMode.POSITION_VECTOR:
-            self.cur_dir = np.dot(self.cur_dir, m)
+            self.cur_dir = np.dot(m, self.cur_dir)
         if self.mtx_mode == MtxMode.TEXTURE:
-            self.cur_tex = np.dot(self.cur_tex, m)
+            self.cur_tex = np.dot(m, self.cur_tex)
 
     def mul_mtx44(self, vals: list[int]):
         self.mul(mat.from4x4(_fx32list(vals)))
@@ -329,11 +329,12 @@ class GeometryBuilder:
         self.scale_vec(fx32(sx), fx32(sy), fx32(sz))
 
     def scale_vec(self, x: float, y: float, z: float):
+        # Skip the direction matrix even in POSITION_VECTOR mode
         m = mat.scale(x, y, z)
         if self.mtx_mode in (MtxMode.POSITION, MtxMode.POSITION_VECTOR):
-            self.cur_pos = np.dot(self.cur_pos, m)
+            self.cur_pos = np.dot(m, self.cur_pos)
         if self.mtx_mode == MtxMode.TEXTURE:
-            self.cur_tex = np.dot(self.cur_tex, m)
+            self.cur_tex = np.dot(m, self.cur_tex)
 
     def translate(self, tx: int, ty: int, tz: int):
         self.translate_vec(fx32(tx), fx32(ty), fx32(tz))

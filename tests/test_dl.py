@@ -41,10 +41,14 @@ def p_normal(nx: float, ny: float, nz: float) -> bytes:
     return p_u32(q(nx) | (q(ny) << 10) | (q(nz) << 20))
 
 
-def p_mtx43(tx=0.0, ty=0.0, tz=0.0, diag=(1.0, 1.0, 1.0)) -> bytes:
+def p_mtx43(tx=0.0, ty=0.0, tz=0.0, basis=None) -> bytes:
     """A 4x3 matrix in NITRO row-major order: three basis rows then translation."""
-    sx, sy, sz = diag
-    return p_fx32(sx, 0, 0, 0, sy, 0, 0, 0, sz, tx, ty, tz)
+    basis = basis if basis is not None else (1, 0, 0, 0, 1, 0, 0, 0, 1)
+    return p_fx32(*basis, tx, ty, tz)
+
+
+# 90 degrees about Z, row-major: (1,0,0) -> (0,1,0)
+ROT_Z90 = (0, 1, 0, -1, 0, 0, 0, 0, 1)
 
 
 def make_dl(*commands: tuple[int, bytes]) -> bytes:
@@ -147,10 +151,15 @@ class TestMatrixCommands:
             (2.0, 3.0, 4.0))
 
     def test_load_mtx44_loads_all_16_values(self):
-        vals = [2, 0, 0, 0, 0, 2, 0, 0, 0, 0, 2, 0, 0, 0, 0, 1]
+        # Every cell distinct, so a transposed or short read fails here.
+        vals = list(range(1, 17))
         b = run((DlCmd.LOAD_MTX44, p_fx32(*vals)))
-        assert mat.mul((1.0, 1.0, 1.0), b.cur_pos) == pytest.approx(
-            (2.0, 2.0, 2.0))
+        assert b.cur_pos == pytest.approx(mat.from4x4(vals))
+
+    def test_load_mtx43_loads_all_12_values(self):
+        vals = list(range(1, 13))
+        b = run((DlCmd.LOAD_MTX43, p_fx32(*vals)))
+        assert b.cur_pos == pytest.approx(mat.from4x3(vals))
 
     def test_load_replaces_rather_than_composes(self):
         b = run(
@@ -160,28 +169,54 @@ class TestMatrixCommands:
         assert mat.mul((0.0, 0.0, 0.0), b.cur_pos) == pytest.approx(
             (2.0, 0.0, 0.0))
 
-    def test_mul_mtx43_composes_with_current(self):
+    def test_mul_applies_the_operand_before_the_current_matrix(self):
+        # The whole point of the convention: v @ operand @ current. Stated once
+        # over the full matrix; the tests below check it through visible effects.
+        prior = mat.from4x3([1, 0, 0, 0, 1, 0, 0, 0, 1, 1.0, 2.0, 3.0])
+        operand = [2, 0, 0, 0, 0, 2, 0, 0, 0, 0, 2, 0, 0, 0, 0, 1]
         b = run(
-            (DlCmd.LOAD_MTX43, p_mtx43(tx=1.0)),
-            (DlCmd.MUL_MTX43, p_mtx43(ty=5.0)),
+            (DlCmd.LOAD_MTX43, p_mtx43(tx=1.0, ty=2.0, tz=3.0)),
+            (DlCmd.MUL_MTX44, p_fx32(*operand)),
+        )
+        assert b.cur_pos == pytest.approx(
+            np.matmul(mat.from4x4(operand), prior))
+
+    def test_mul_mtx43_composes_with_current(self):
+        # Rotate, then multiply in a translation: the translation happens first
+        # and so gets rotated. Reversing the operands would give (1, 0, 0).
+        b = run(
+            (DlCmd.LOAD_MTX43, p_mtx43(basis=ROT_Z90)),
+            (DlCmd.MUL_MTX43, p_mtx43(tx=1.0)),
         )
         assert mat.mul((0.0, 0.0, 0.0), b.cur_pos) == pytest.approx(
-            (1.0, 5.0, 0.0))
+            (0.0, 1.0, 0.0))
 
     def test_mul_mtx44_composes_with_current(self):
+        # Translate, then multiply in a scale: the scale runs first, so it does
+        # not multiply the translation. Reversing would give (2, 0, 0).
         double = [2, 0, 0, 0, 0, 2, 0, 0, 0, 0, 2, 0, 0, 0, 0, 1]
         b = run(
             (DlCmd.LOAD_MTX43, p_mtx43(tx=1.0)),
             (DlCmd.MUL_MTX44, p_fx32(*double)),
         )
         assert mat.mul((0.0, 0.0, 0.0), b.cur_pos) == pytest.approx(
-            (2.0, 0.0, 0.0))
+            (1.0, 0.0, 0.0))
 
-    def test_mul_mtx33_composes_rotation_only(self):
-        # 3x3 scale-by-2, no translation component
-        b = run((DlCmd.MUL_MTX33, p_fx32(2, 0, 0, 0, 2, 0, 0, 0, 2)))
+    def test_mul_mtx33_composes_with_current(self):
+        # Scale-by-2 ahead of a translate-by-1: (1,1,1) -> (2,2,2) -> (3,2,2).
+        # Reversing the operands would give (4, 2, 2).
+        b = run(
+            (DlCmd.LOAD_MTX43, p_mtx43(tx=1.0)),
+            (DlCmd.MUL_MTX33, p_fx32(2, 0, 0, 0, 2, 0, 0, 0, 2)),
+        )
         assert mat.mul((1.0, 1.0, 1.0), b.cur_pos) == pytest.approx(
-            (2.0, 2.0, 2.0))
+            (3.0, 2.0, 2.0))
+
+    def test_mul_mtx33_contributes_no_translation(self):
+        b = run((DlCmd.MUL_MTX33, p_fx32(*ROT_Z90)))
+        assert b.cur_pos[3, :].tolist() == [0.0, 0.0, 0.0, 1.0]
+        assert mat.mul((1.0, 0.0, 0.0), b.cur_pos) == pytest.approx(
+            (0.0, 1.0, 0.0))
 
     def test_identity_resets_the_current_matrix(self):
         b = run(
@@ -192,11 +227,17 @@ class TestMatrixCommands:
         assert b.cur_dir == pytest.approx(np.identity(4))
 
     def test_identity_in_texture_mode_only_resets_texture_matrix(self):
-        b = run(
+        b = GeometryBuilder()
+        b.run_dl(make_dl(
             (DlCmd.LOAD_MTX43, p_mtx43(tx=5.0)),
             (DlCmd.MTX_MODE, p_u32(int(MtxMode.TEXTURE))),
-            (DlCmd.IDENTITY, b""),
-        )
+            (DlCmd.SCALE, p_fx32(2.0, 2.0, 2.0)),
+        ))
+        # Guard the guard: IDENTITY clearing cur_tex only proves something if
+        # cur_tex was dirty to begin with.
+        assert b.cur_tex != pytest.approx(np.identity(4))
+
+        b.run_dl(make_dl((DlCmd.IDENTITY, b"")))
         assert b.cur_tex == pytest.approx(np.identity(4))
         assert mat.mul((0.0, 0.0, 0.0), b.cur_pos) == pytest.approx(
             (5.0, 0.0, 0.0))
@@ -206,18 +247,40 @@ class TestMatrixCommands:
         assert mat.mul((1.0, 1.0, 1.0), b.cur_pos) == pytest.approx(
             (2.0, 3.0, 4.0))
 
+    def test_scale_composes_before_the_current_matrix(self):
+        # Scale runs first, so the already-loaded translation is not scaled.
+        # Reversing the operands would give (2, 0, 0).
+        b = run(
+            (DlCmd.LOAD_MTX43, p_mtx43(tx=1.0)),
+            (DlCmd.SCALE, p_fx32(2.0, 2.0, 2.0)),
+        )
+        assert mat.mul((0.0, 0.0, 0.0), b.cur_pos) == pytest.approx(
+            (1.0, 0.0, 0.0))
+        assert mat.mul((1.0, 0.0, 0.0), b.cur_pos) == pytest.approx(
+            (3.0, 0.0, 0.0))
+
     def test_translate_command_moves_the_origin(self):
         b = run((DlCmd.TRANSLATE, p_fx32(1.0, -2.0, 0.5)))
         assert mat.mul((0.0, 0.0, 0.0), b.cur_pos) == pytest.approx(
             (1.0, -2.0, 0.5))
 
-    def test_translate_composes_with_the_current_matrix(self):
+    def test_translate_accumulates_with_the_current_matrix(self):
         b = run(
             (DlCmd.TRANSLATE, p_fx32(1.0, 0.0, 0.0)),
             (DlCmd.TRANSLATE, p_fx32(0.0, 2.0, 0.0)),
         )
         assert mat.mul((0.0, 0.0, 0.0), b.cur_pos) == pytest.approx(
             (1.0, 2.0, 0.0))
+
+    def test_translate_composes_before_the_current_matrix(self):
+        # Translation runs first and is therefore rotated by the loaded matrix.
+        # Reversing the operands would give (1, 0, 0).
+        b = run(
+            (DlCmd.LOAD_MTX43, p_mtx43(basis=ROT_Z90)),
+            (DlCmd.TRANSLATE, p_fx32(1.0, 0.0, 0.0)),
+        )
+        assert mat.mul((0.0, 0.0, 0.0), b.cur_pos) == pytest.approx(
+            (0.0, 1.0, 0.0))
 
     def test_translate_agrees_with_load_mtx43(self):
         # matrix.translate and matrix.from4x3 must use the same convention
@@ -234,6 +297,30 @@ class TestMatrixCommands:
     def test_mul_applies_to_direction_matrix_in_position_vector_mode(self):
         b = run((DlCmd.MUL_MTX33, p_fx32(2, 0, 0, 0, 2, 0, 0, 0, 2)))
         assert b.cur_dir == pytest.approx(b.cur_pos)
+        assert mat.mul((1.0, 1.0, 1.0), b.cur_dir) == pytest.approx(
+            (2.0, 2.0, 2.0))
+
+    def test_mul_in_texture_mode_composes_the_texture_matrix(self):
+        b = run(
+            (DlCmd.MTX_MODE, p_u32(int(MtxMode.TEXTURE))),
+            (DlCmd.LOAD_MTX43, p_mtx43(tx=1.0)),
+            (DlCmd.MUL_MTX44, p_fx32(2, 0, 0, 0, 0, 2, 0, 0, 0, 0, 2, 0, 0, 0, 0, 1)),
+        )
+        assert mat.mul((0.0, 0.0, 0.0), b.cur_tex) == pytest.approx(
+            (1.0, 0.0, 0.0))
+        assert b.cur_pos == pytest.approx(np.identity(4))
+
+    def test_pop_mtx_restores_both_position_and_direction(self):
+        b = run(
+            (DlCmd.MUL_MTX33, p_fx32(*ROT_Z90)),
+            (DlCmd.PUSH_MTX, b""),
+            (DlCmd.IDENTITY, b""),
+            (DlCmd.POP_MTX, p_u32(1)),
+        )
+        assert mat.mul((1.0, 0.0, 0.0), b.cur_pos) == pytest.approx(
+            (0.0, 1.0, 0.0))
+        assert mat.mul((1.0, 0.0, 0.0), b.cur_dir) == pytest.approx(
+            (0.0, 1.0, 0.0))
 
     def test_texture_mode_isolates_texture_matrix(self):
         b = run(
@@ -392,6 +479,16 @@ class TestAttributeCommands:
                    ).last_col == pytest.approx((0.0, 0.0, 0.0))
         assert run((DlCmd.COLOR, p_u32(0x7FFF))
                    ).last_col == pytest.approx((1.0, 1.0, 1.0))
+
+    def test_color_expands_midpoints_over_the_full_range(self):
+        # Endpoints alone can't distinguish v/31 from the rounded 5->8 bit
+        # expansion the hardware uses, so pin an interior value too.
+        b = run((DlCmd.COLOR, p_u32(15 | (15 << 5) | (15 << 10))))
+        assert b.last_col == pytest.approx((123 / 255,) * 3)
+
+    def test_color_ignores_bit_15(self):
+        b = run((DlCmd.COLOR, p_u32(0x8000)))
+        assert b.last_col == pytest.approx((0.0, 0.0, 0.0))
 
     def test_texcoord_scales_by_texture_size(self):
         b = GeometryBuilder()
@@ -566,6 +663,8 @@ class TestPrimitiveAssembly:
         b.run_dl(tri_dl(PrimType.TRIANGLES, [
                  (0.0, 0.0, 0.0), (1.0, 0.0, 0.0)]))
         assert b.triangles == []
+        assert b.num_triangles == 0
+        assert b.num_vertices_emitted == 2
 
     @pytest.mark.parametrize("count,expected", [(3, 1), (4, 1), (5, 1), (6, 2), (7, 2)])
     def test_triangles_discards_incomplete_trailing_primitive(self, count, expected):
@@ -710,6 +809,7 @@ class TestCommandLengths:
         (DlCmd.NOP, b""),
         (DlCmd.MTX_MODE, p_u32(int(MtxMode.POSITION_VECTOR))),
         (DlCmd.PUSH_MTX, b""),
+        (DlCmd.POP_MTX, p_u32(0)),
         (DlCmd.STORE_MTX, p_u32(1)),
         (DlCmd.RESTORE_MTX, p_u32(1)),
         (DlCmd.IDENTITY, b""),
@@ -723,6 +823,14 @@ class TestCommandLengths:
         (DlCmd.TRANSLATE, p_fx32(0.0, 0.0, 0.0)),
         (DlCmd.COLOR, p_u32(0x7FFF)),
         (DlCmd.TEXCOORD, p_u32(0)),
+        (DlCmd.VERTEX, p_vertex(0.0, 0.0, 0.0)),
+        (DlCmd.VERTEX_10, p_vertex10(0.0, 0.0, 0.0)),
+        (DlCmd.VERTEX_XY, p_u32(0)),
+        (DlCmd.VERTEX_XZ, p_u32(0)),
+        (DlCmd.VERTEX_YZ, p_u32(0)),
+        (DlCmd.VERTEX_DIFF, p_u32(0)),
+        (DlCmd.BEGIN, p_u32(int(PrimType.TRIANGLES))),
+        (DlCmd.END, b""),
         (DlCmd.POLY_ATTR, p_u32(0)),
         (DlCmd.TEX_IMG_PARAM, p_u32(0)),
         (DlCmd.TEX_PLTT_BASE, p_u32(0)),

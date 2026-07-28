@@ -6,13 +6,13 @@ import pytest
 from nitro import matrix as mat
 from nitro.binary import BinaryReader
 from nitro.dictionary import Dictionary
-from nitro.dl import GeometryBuilder, MtxMode, PrimType
+from nitro.dl import GeometryBuilder, MtxMode
 from nitro.mdl0 import (Envelope, EvpMatrices, MatFlag, Material, MaterialSet,
                         Model, ModelInfo, NodeData, NodeSet, Shape, ShapeSet,
                         SrtFlag)
-from nitro.sbc import DrawCall, SbcCmd, SbcFlag, SbcInterpreter
-from tests.test_dl import p_mtx43, tri_dl
-from tests.test_mdl0 import (fx32, make_material_bytes, make_model_info_bytes,
+from nitro.sbc import SbcCmd, SbcFlag, SbcInterpreter
+from tests.test_dl import ROT_Z90, tri_dl
+from tests.test_mdl0 import (make_material_bytes, make_model_info_bytes,
                              make_node_bytes)
 
 RIGID = SrtFlag.TRANSLATION_ZERO | SrtFlag.ROTATION_ZERO | SrtFlag.SCALE_ONE
@@ -90,9 +90,9 @@ def interpret(sbc: bytes, *, mat_tex_dims=None, builder=None, **kwargs) -> SbcIn
     return interp
 
 
-def nodedesc(node_id: int, flag=SbcFlag.F000, store=0, restore=0) -> bytes:
+def nodedesc(node_id: int, flag=SbcFlag.F000, store=0, restore=0, parent=0) -> bytes:
     """SBC_NODEDESC: opcode, node id, parent id, scale-compensate, [store], [restore]."""
-    out = bytes([SbcCmd.NODEDESC | flag, node_id, 0, 0])
+    out = bytes([SbcCmd.NODEDESC | flag, node_id, parent, 0])
     if flag == SbcFlag.F001:
         out += bytes([store])
     elif flag == SbcFlag.F010:
@@ -160,9 +160,22 @@ class TestNodeDesc:
         assert interp.current_node == 1
 
     def test_records_world_matrix_per_node(self):
-        interp = interpret(nodedesc(0) + bytes([SbcCmd.RET]))
-        assert interp.node_world[0] is not None
-        assert interp.node_world[0] == pytest.approx(np.identity(4))
+        # node_world starts out full of identities, so a rigid node would make
+        # this pass without the interpreter recording anything.
+        n = node(SrtFlag.ROTATION_ZERO | SrtFlag.SCALE_ONE,
+                 translation=(1.0, 2.0, 3.0))
+        interp = interpret(nodedesc(0) + bytes([SbcCmd.RET]), nodes=[n])
+        assert mat.mul((0.0, 0.0, 0.0), interp.node_world[0]) == pytest.approx(
+            (1.0, 2.0, 3.0))
+
+    def test_parent_comes_from_traversal_order_not_the_parent_byte(self):
+        # The interpreter derives the hierarchy from the order nodes are
+        # visited and ignores the parent id in the stream, so a bogus parent
+        # byte must not change the result.
+        sbc = nodedesc(0, parent=200) + \
+            nodedesc(1, parent=200) + bytes([SbcCmd.RET])
+        interp = interpret(sbc, nodes=[node(), node()])
+        assert interp.node_parent == [-1, 0]
 
     def test_store_flag_maps_stack_slot_to_node(self):
         sbc = nodedesc(0, SbcFlag.F001, store=5) + bytes([SbcCmd.RET])
@@ -231,33 +244,61 @@ class TestNodeDesc:
             (1.0, 2.0, 0.0))
 
     def test_joint_with_both_rotation_and_translation(self):
+        # Rotation and translation come from one combined matrix, so the
+        # translation is *not* rotated: (1,0,0) rotates to (0,1,0), then the
+        # translation is added.
         n = node(SrtFlag.SCALE_ONE, translation=(1.0, 2.0, 3.0),
-                 rotation=[1, 0, 0, 0, 1, 0, 0, 0])
+                 rotation=ROT_Z90)
         b = GeometryBuilder()
         interpret(nodedesc(0) + bytes([SbcCmd.RET]), nodes=[n], builder=b)
         assert mat.mul((0.0, 0.0, 0.0), b.cur_pos) == pytest.approx(
             (1.0, 2.0, 3.0))
+        assert mat.mul((1.0, 0.0, 0.0), b.cur_pos) == pytest.approx(
+            (1.0, 3.0, 3.0))
 
-    def test_joint_scale_is_applied_after_translation(self):
-        # _apply_joint muls the translation first, then the scale, so the scale
-        # ends up multiplying the translation too.
+    def test_joint_scale_is_applied_before_translation(self):
+        # A joint is SRT: the vertex is scaled first, then translated, so the
+        # translation itself is not scaled.
         n = node(SrtFlag.ROTATION_ZERO, translation=(1.0, 0.0, 0.0),
                  scale=[2.0, 2.0, 2.0, 0.0, 0.0, 0.0])
         b = GeometryBuilder()
         interpret(nodedesc(0) + bytes([SbcCmd.RET]), nodes=[n], builder=b)
-        assert mat.mul((1.0, 0.0, 0.0), b.cur_pos) == pytest.approx(
-            (4.0, 0.0, 0.0))
         assert mat.mul((0.0, 0.0, 0.0), b.cur_pos) == pytest.approx(
-            (2.0, 0.0, 0.0))
+            (1.0, 0.0, 0.0))
+        assert mat.mul((1.0, 0.0, 0.0), b.cur_pos) == pytest.approx(
+            (3.0, 0.0, 0.0))
+
+    def test_joint_scale_is_applied_before_rotation(self):
+        n = node(0, translation=(0.0, 0.0, 0.0), rotation=ROT_Z90,
+                 scale=[2.0, 1.0, 1.0, 0.0, 0.0, 0.0])
+        b = GeometryBuilder()
+        interpret(nodedesc(0) + bytes([SbcCmd.RET]), nodes=[n], builder=b)
+        # scale x by 2 -> (2,0,0), then rotate 90 about Z -> (0,2,0).
+        # Rotating first would instead stretch y and give (0,1,0).
+        assert mat.mul((1.0, 0.0, 0.0), b.cur_pos) == pytest.approx(
+            (0.0, 2.0, 0.0))
 
     def test_rotation_only_joint_applies_rotation(self):
         n = node(SrtFlag.TRANSLATION_ZERO | SrtFlag.SCALE_ONE,
-                 rotation=[0, 1, 0, -1, 0, 0, 0, 0])
+                 rotation=ROT_Z90)
         b = GeometryBuilder()
         interpret(nodedesc(0) + bytes([SbcCmd.RET]), nodes=[n], builder=b)
-        assert b.cur_pos != pytest.approx(np.identity(4))
+        assert mat.mul((1.0, 0.0, 0.0), b.cur_pos) == pytest.approx(
+            (0.0, 1.0, 0.0))
         assert mat.mul((0.0, 0.0, 0.0), b.cur_pos) == pytest.approx(
             (0.0, 0.0, 0.0))
+
+    def test_child_joint_transform_runs_before_the_parent(self):
+        # The parent rotates; the child is offset along x. The child's offset
+        # must be rotated by the parent, landing it on +y.
+        parent = node(SrtFlag.TRANSLATION_ZERO | SrtFlag.SCALE_ONE,
+                      rotation=ROT_Z90)
+        child = node(SrtFlag.ROTATION_ZERO | SrtFlag.SCALE_ONE,
+                     translation=(1.0, 0.0, 0.0))
+        interp = interpret(nodedesc(0) + nodedesc(1) + bytes([SbcCmd.RET]),
+                           nodes=[parent, child])
+        assert mat.mul((0.0, 0.0, 0.0), interp.node_world[1]) == pytest.approx(
+            (0.0, 1.0, 0.0))
 
     def test_applies_joint_scale(self):
         n = node(SrtFlag.TRANSLATION_ZERO | SrtFlag.ROTATION_ZERO,
@@ -272,6 +313,85 @@ class TestNodeDesc:
         interpret(nodedesc(0) + bytes([SbcCmd.RET]),
                   nodes=[node(RIGID)], builder=b)
         assert b.cur_pos == pytest.approx(np.identity(4))
+
+
+def pivot_flag(index: int, *extra) -> int:
+    flag = SrtFlag.HAS_PIVOT | SrtFlag.TRANSLATION_ZERO | SrtFlag.SCALE_ONE
+    flag |= index << 4
+    for e in extra:
+        flag |= e
+    return flag
+
+
+class TestPivotRotation:
+    """Compressed rotations: a pivot index plus two values reconstruct a 3x3.
+
+    The node stores the index of the one element that is +/-1 and the two
+    remaining magnitudes; _PIVOT says which cells the magnitudes go in and the
+    SIGN_REV flags pick their signs.
+    """
+
+    def _cur_pos(self, flag, a, b):
+        n = node(flag, pivot=(a, b))
+        builder = GeometryBuilder()
+        interpret(nodedesc(0) + bytes([SbcCmd.RET]),
+                  nodes=[n], builder=builder)
+        return builder.cur_pos
+
+    def test_pivot_index_4_with_sign_revc_is_a_y_rotation(self):
+        # index 4 is the centre cell, so the pivot axis is Y and the layout is
+        # [[a, 0, b], [0, 1, 0], [-b, 0, a]] -- a 90 degree turn for a=0, b=1.
+        m = self._cur_pos(pivot_flag(4, SrtFlag.SIGN_REVC), 0.0, 1.0)
+        assert mat.mul((1.0, 0.0, 0.0), m) == pytest.approx((0.0, 0.0, 1.0))
+        assert mat.mul((0.0, 1.0, 0.0), m) == pytest.approx((0.0, 1.0, 0.0))
+        assert mat.mul((0.0, 0.0, 1.0), m) == pytest.approx((-1.0, 0.0, 0.0))
+
+    def test_pivot_index_4_is_orthonormal_for_a_unit_pair(self):
+        # a/b round to the nearest 1/4096, hence the loose tolerances here and
+        # in the sign tests below.
+        a, b = 0.6, 0.8
+        m = self._cur_pos(pivot_flag(4, SrtFlag.SIGN_REVC), a, b)
+        r = m[:3, :3]
+        assert np.matmul(r, r.T) == pytest.approx(np.identity(3), abs=1e-3)
+
+    def test_pivot_index_0_with_sign_revc_is_an_x_rotation(self):
+        # index 0 pins [0][0] to 1 and fills cells 4, 5, 7, 8.
+        m = self._cur_pos(pivot_flag(0, SrtFlag.SIGN_REVC), 0.0, 1.0)
+        assert mat.mul((1.0, 0.0, 0.0), m) == pytest.approx((1.0, 0.0, 0.0))
+        assert mat.mul((0.0, 1.0, 0.0), m) == pytest.approx((0.0, 0.0, 1.0))
+        assert mat.mul((0.0, 0.0, 1.0), m) == pytest.approx((0.0, -1.0, 0.0))
+
+    def test_pivot_negative_flips_the_pinned_element(self):
+        plain = self._cur_pos(pivot_flag(4, SrtFlag.SIGN_REVC), 0.6, 0.8)
+        negated = self._cur_pos(
+            pivot_flag(4, SrtFlag.SIGN_REVC, SrtFlag.PIVOT_NEGATIVE), 0.6, 0.8)
+        assert plain[1, 1] == pytest.approx(1.0)
+        assert negated[1, 1] == pytest.approx(-1.0)
+        # only the pinned cell differs
+        assert np.count_nonzero(
+            ~np.isclose(plain[:3, :3], negated[:3, :3])) == 1
+
+    def test_sign_rev_flags_select_the_two_derived_signs(self):
+        base = self._cur_pos(pivot_flag(4), 0.6, 0.8)
+        assert (base[2, 0], base[2, 2]) == pytest.approx((0.8, 0.6), abs=1e-3)
+
+        revc = self._cur_pos(pivot_flag(4, SrtFlag.SIGN_REVC), 0.6, 0.8)
+        assert (revc[2, 0], revc[2, 2]) == pytest.approx((-0.8, 0.6), abs=1e-3)
+
+        revd = self._cur_pos(pivot_flag(4, SrtFlag.SIGN_REVD), 0.6, 0.8)
+        assert (revd[2, 0], revd[2, 2]) == pytest.approx((0.8, -0.6), abs=1e-3)
+
+    def test_rotation_zero_beats_has_pivot(self):
+        # ROTATION_ZERO wins, so no pivot data is read and no rotation applied
+        m = self._cur_pos(pivot_flag(4, SrtFlag.ROTATION_ZERO), 0.0, 0.0)
+        assert m == pytest.approx(np.identity(4))
+
+    @pytest.mark.parametrize("index", range(9))
+    def test_every_pivot_index_fills_all_nine_cells(self, index):
+        m = self._cur_pos(pivot_flag(index, SrtFlag.SIGN_REVC), 0.6, 0.8)
+        r = m[:3, :3]
+        assert np.count_nonzero(r) == 5, f"pivot index {index} left gaps"
+        assert np.matmul(r, r.T) == pytest.approx(np.identity(3), abs=1e-3)
 
 
 class TestMtx:
@@ -321,9 +441,12 @@ class TestMat:
         assert (b.tex_width, b.tex_height) == (16, 32)
 
     def test_out_of_range_material_index_is_ignored(self):
-        sbc = bytes([SbcCmd.MAT, 9, SbcCmd.RET])
-        interp = interpret(sbc, materials=[material()])
+        b = GeometryBuilder()
+        before = (b.tex_width, b.tex_height, b.tex_gen)
+        interp = interpret(bytes([SbcCmd.MAT, 9, SbcCmd.RET]),
+                           materials=[material()], builder=b)
         assert interp.current_mat == 9  # recorded, but no builder state touched
+        assert (b.tex_width, b.tex_height, b.tex_gen) == before
 
     def test_consumes_two_bytes(self):
         sbc = bytes([SbcCmd.MAT, 0]) + nodedesc(0) + bytes([SbcCmd.RET])
@@ -360,12 +483,17 @@ class TestShp:
         assert (second.tri_start, second.tri_end) == (1, 2)
 
     def test_draw_call_captures_bind_matrices(self):
-        sbc = bytes([SbcCmd.SHP, 0, SbcCmd.RET])
-        interp = interpret(sbc)
+        # A translating joint ahead of the shape, so an identity or missing
+        # bind matrix is distinguishable from the real one.
+        n = node(SrtFlag.ROTATION_ZERO | SrtFlag.SCALE_ONE,
+                 translation=(1.0, 2.0, 3.0))
+        sbc = nodedesc(0) + bytes([SbcCmd.SHP, 0, SbcCmd.RET])
+        interp = interpret(sbc, nodes=[n])
 
         call = interp.draw_calls[0]
-        assert call.bind_pos is not None
-        assert call.bind_dir is not None
+        assert mat.mul((0.0, 0.0, 0.0), call.bind_pos) == pytest.approx(
+            (1.0, 2.0, 3.0))
+        assert call.bind_dir == pytest.approx(call.bind_pos)
         assert call.single_mtx is True
 
     def test_shape_geometry_reaches_the_builder(self):
@@ -483,6 +611,22 @@ class TestNodeMix:
         assert mat.mul((0.0, 0.0, 0.0), b.cur_pos) == pytest.approx(
             (0.0, 0.0, 0.0))
 
+    def test_envelope_inverse_is_applied_before_the_stack_matrix(self):
+        # Skinning is v @ inv_bind @ node_world: the inverse bind pose takes
+        # the vertex out of model space first. With pure translations either
+        # order gives the same answer, so use a rotation to pin it down.
+        b = GeometryBuilder()
+        b.pos_stack[0] = mat.from4x3(
+            [1, 0, 0, 0, 1, 0, 0, 0, 1, 5.0, 0.0, 0.0])
+        evp = envelope(inv_m=[*ROT_Z90, 0.0, 0.0, 0.0])
+        sbc = bytes([SbcCmd.NODEMIX, 0, 1, 0, 0, 255, SbcCmd.RET])
+        interpret(sbc, envelopes=[evp], builder=b)
+
+        # rotate (1,0,0) to (0,1,0), then translate: (5,1,0).
+        # The other order would give (0,6,0).
+        assert mat.mul((1.0, 0.0, 0.0), b.cur_pos) == pytest.approx(
+            (5.0, 1.0, 0.0))
+
     def test_result_is_stored_to_the_named_stack_slot(self):
         b = GeometryBuilder()
         sbc = bytes([SbcCmd.NODEMIX, 9, 1, 0, 0, 255, SbcCmd.RET])
@@ -528,15 +672,22 @@ class TestNodeMix:
 
 
 class TestCallDl:
-    def _sbc(self, dl: bytes) -> bytes:
-        # CALLDL: opcode, u32 offset (relative to the opcode), u32 length.
-        return bytes([SbcCmd.CALLDL]) + struct.pack("<II", 9, len(dl)) + dl + \
-            bytes([SbcCmd.RET])
+    def _sbc(self, dl: bytes, head: bytes = b"", tail: bytes | None = None) -> bytes:
+        """CALLDL: opcode, u32 offset (relative to the opcode), u32 length.
+
+        The display list is parked *after* ``tail``, which ends the stream.
+        Execution resumes at the byte after the operands, so an inline display
+        list would be decoded as SBC opcodes -- real files keep their display
+        lists out of the instruction path and so does this helper.
+        """
+        tail = bytes([SbcCmd.RET]) if tail is None else tail
+        return head + bytes([SbcCmd.CALLDL]) + \
+            struct.pack("<II", 9 + len(tail), len(dl)) + tail + dl
 
     def test_emits_a_draw_call_with_no_shape_index(self):
         interp = interpret(self._sbc(tri_dl()))
-        call = interp.draw_calls[0]
-        assert call.shape == -1
+        assert len(interp.draw_calls) == 1
+        assert interp.draw_calls[0].shape == -1
 
     def test_draw_call_fields_line_up(self):
         interp = interpret(self._sbc(tri_dl()))
@@ -553,32 +704,35 @@ class TestCallDl:
         interpret(self._sbc(tri_dl()), builder=b)
         assert len(b.triangles) == 1
 
+    def test_reads_the_display_list_from_the_given_offset_and_length(self):
+        # A short length would truncate the list and drop the triangle; a wrong
+        # offset would decode neighbouring bytes instead.
+        dl = tri_dl()
+        interp = interpret(self._sbc(dl))
+        assert (interp.draw_calls[0].tri_start,
+                interp.draw_calls[0].tri_end) == (0, 1)
+
+        # dropping the final command word cuts off the END, so nothing flushes
+        short = bytes([SbcCmd.CALLDL]) + \
+            struct.pack("<II", 10, len(dl) - 4) + bytes([SbcCmd.RET]) + dl
+        assert interpret(short).draw_calls[0].tri_end == 0
+
     def test_binds_to_the_current_node(self):
         b = GeometryBuilder()
-        dl = tri_dl()
-        sbc = nodedesc(0) + nodedesc(1) + self._sbc(dl)
-        # the CALLDL offset is relative to its own opcode, so recompute it
-        head = nodedesc(0) + nodedesc(1)
-        sbc = head + bytes([SbcCmd.CALLDL]) + struct.pack("<II", 9, len(dl)) + \
-            dl + bytes([SbcCmd.RET])
+        sbc = self._sbc(tri_dl(), head=nodedesc(0) + nodedesc(1))
         interp = interpret(sbc, nodes=[node(), node()], builder=b)
         assert interp.draw_calls[0].node == 1
         assert [v.node for v in b.triangles[0]] == [1, 1, 1]
 
     def test_records_current_material(self):
-        dl = tri_dl()
-        head = bytes([SbcCmd.MAT, 1])
-        sbc = head + bytes([SbcCmd.CALLDL]) + struct.pack("<II", 9, len(dl)) + \
-            dl + bytes([SbcCmd.RET])
-        interp = interpret(sbc, materials=[material(), material()])
+        interp = interpret(self._sbc(tri_dl(), head=bytes([SbcCmd.MAT, 1])),
+                           materials=[material(), material()])
         assert interp.draw_calls[0].material == 1
 
     def test_consumes_nine_bytes(self):
-        dl = tri_dl()
         # operands point past the trailing NODEDESC, so the offset skips it
-        tail = nodedesc(0) + bytes([SbcCmd.RET])
-        sbc = bytes([SbcCmd.CALLDL]) + struct.pack("<II", 9 + len(tail), len(dl)) + \
-            tail + dl
+        sbc = self._sbc(tri_dl(),
+                        tail=nodedesc(0) + bytes([SbcCmd.RET]))
         interp = interpret(sbc)
         assert interp.node_seen == [
             True], "CALLDL consumed the wrong byte count"

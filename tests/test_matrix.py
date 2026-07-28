@@ -49,6 +49,17 @@ class TestConstructors:
         m = mat.from3x3(ROT_Z90)
         assert m[:3, :3].flatten().tolist() == ROT_Z90
 
+    @pytest.mark.parametrize("build", [
+        pytest.param(lambda: mat.from4x3([0] * 12), id="from4x3"),
+        pytest.param(lambda: mat.from3x3([0] * 9), id="from3x3"),
+    ])
+    def test_default_padding_is_not_shared_between_calls(self, build):
+        # The col3/row3 defaults are mutable list literals, so a caller that
+        # mutates a returned matrix must not poison the next call.
+        first = build()
+        first[:] = 99.0
+        assert build()[:, 3].tolist()[-1] == 1.0
+
 
 class TestTranslationConvention:
     """Every builder must agree on where translation lives: the bottom row."""

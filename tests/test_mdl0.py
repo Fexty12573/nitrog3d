@@ -18,11 +18,21 @@ def fx16(v: float) -> int:
 
 
 def make_node_bytes(flag: int, translation=(0, 0, 0), rotation=None, pivot=None, scale=None) -> bytes:
-    buf = struct.pack("<Hh", flag, 0)
+    """Serialise NodeData SRT fields.
+
+    ``rotation`` is a full 9-element row-major 3x3. Element [0][0] shares the
+    header word with ``flag`` -- that is where the format keeps it -- and the
+    other eight follow as fx16, so a caller passing only eight values would
+    silently be describing a matrix with a zero in the top-left corner.
+    """
+    rotation = list(rotation) if rotation is not None else [0.0] * 9
+    assert len(rotation) == 9, "rotation must be a full 3x3"
+
+    buf = struct.pack("<Hh", flag, fx16(rotation[0]))
     if not (flag & SrtFlag.TRANSLATION_ZERO):
         buf += struct.pack("<3i", *[fx32(v) for v in translation])
     if not (flag & (SrtFlag.ROTATION_ZERO | SrtFlag.HAS_PIVOT)):
-        buf += struct.pack("<8h", *[fx16(v) for v in (rotation or [0] * 8)])
+        buf += struct.pack("<8h", *[fx16(v) for v in rotation[1:]])
     if (flag & SrtFlag.HAS_PIVOT) and not (flag & SrtFlag.ROTATION_ZERO):
         buf += struct.pack("<2h", *[fx16(v) for v in (pivot or [0, 0])])
     if not (flag & SrtFlag.SCALE_ONE):
@@ -63,6 +73,12 @@ class TestNodeData:
         assert (node.a, node.b) == pytest.approx((0.5, -0.5))
         # full 3x3 rotation fields shouldn't be touched
         assert node._01 == 0.0 and node._22 == 0.0
+
+    def test_rot_mtx_is_row_major_starting_at_the_header_field(self):
+        rot = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+        node = NodeData(BinaryReader(make_node_bytes(
+            SrtFlag.TRANSLATION_ZERO | SrtFlag.SCALE_ONE, rotation=rot)))
+        assert node.rot_mtx() == pytest.approx(rot, abs=1 / FX16_SCALE)
 
     def test_has_pivot_with_rotation_zero_skips_pivot_too(self):
         # ROTATION_ZERO takes precedence. No pivot rotation data is read even though HAS_PIVOT is also set.
@@ -109,7 +125,8 @@ class TestNodeData:
     ])
     def test_write_reads_back_identically(self, flag):
         original = NodeData(BinaryReader(make_node_bytes(
-            flag, translation=(1.0, -2.0, 3.5), rotation=[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8],
+            flag, translation=(1.0, -2.0, 3.5),
+            rotation=[-0.5, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8],
             pivot=(0.25, -0.25), scale=[1.5, 2.5, 3.5, 0.5, 0.5, 0.5])))
 
         w = BinaryWriter()
@@ -118,6 +135,10 @@ class TestNodeData:
 
         assert w.length == len(make_node_bytes(flag))
         assert roundtripped.flag == original.flag
+        # _00 lives in the header word and is negative here, so this also
+        # covers the signed round trip through write_u16.
+        assert roundtripped._00 == original._00
+        assert roundtripped.rot_mtx() == pytest.approx(original.rot_mtx())
         assert (roundtripped.tx, roundtripped.ty, roundtripped.tz) == \
             pytest.approx((original.tx, original.ty, original.tz))
         assert (roundtripped.a, roundtripped.b) == pytest.approx((original.a, original.b))
