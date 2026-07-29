@@ -5,7 +5,7 @@ import numpy as np
 from . import texture
 from .binary import bgr555_to_float
 from .nsbmd import NSBMD
-from .mdl0 import Model
+from .mdl0 import Model, MatFlag
 from .tex0 import TEX0, TexFmt
 from .dl import GeometryBuilder, Triangle, Vertex
 from .sbc import SbcInterpreter, DrawCall
@@ -77,12 +77,17 @@ class Bone:
     world_mtx: np.ndarray
 
 
+TextureCache = dict[tuple[str, str], DecodedTexture | None]
+
+
 def load(data: bytes | bytearray) -> ImportedModel:
     nsbmd = NSBMD(data)
     result = ImportedModel()
 
     if nsbmd.model_set is None:
         return result
+
+    tex_cache: TextureCache = {}
 
     for name, model in nsbmd.model_set:
         sub = ImportedSubModel(name)
@@ -91,30 +96,23 @@ def load(data: bytes | bytearray) -> ImportedModel:
         interpreter = SbcInterpreter(
             model,
             builder,
-            material_texture_dims(model, nsbmd.tex_pltt_set)
+            _material_texture_dims(model, nsbmd.tex_pltt_set)
         )
 
         interpreter.run()
 
-        node_names = model.nodes.dict.keys()
-        for i in range(len(model.nodes)):
-            bname = node_names[i] if i < len(node_names) else f"bone{i}"
-            sub.bones.append(Bone(
-                bname,
-                interpreter.node_parent[i],
-                interpreter.node_world[i]
-            ))
-
+        sub.bones = _build_bones(model, interpreter)
         sub.meshes = _build_meshes(model, builder, interpreter.draw_calls)
 
-        mb = MaterialBuilder(model, nsbmd.tex_pltt_set, result.textures)
+        mb = MaterialBuilder(model, nsbmd.tex_pltt_set,
+                             tex_cache, result.textures)
         sub.materials = mb.build()
         result.models.append(sub)
 
     return result
 
 
-def material_texture_dims(model: Model, tex_set: TEX0 | None):
+def _material_texture_dims(model: Model, tex_set: TEX0 | None):
     if not tex_set:
         return {}
 
@@ -123,73 +121,81 @@ def material_texture_dims(model: Model, tex_set: TEX0 | None):
         tn = model.materials.texture_name(i)
         if tn is None:
             continue
-        idx = tex_set.tex_dict.index_of(tn)
-        if idx >= 0:
-            e = tex_set.tex_dict.data[idx]
+        e = tex_set.tex_dict[tn]
+        if e is not None:
             dims[i] = (e.s, e.t)
 
     return dims
 
 
+def _build_bones(model: Model, interp: SbcInterpreter) -> list[Bone]:
+    names = model.nodes.dict.keys()
+    return [
+        Bone(
+            names[i] if i < len(names) else f"bone{i}",
+            interp.node_parent[i],
+            interp.node_world[i]
+        ) for i in range(len(model.nodes))
+    ]
+
+
 def _build_meshes(model: Model, builder: GeometryBuilder, draw_calls: list[DrawCall]) -> list[ImportedMesh]:
     tris = builder.triangles
     meshes: list[ImportedMesh] = []
-    node_names = model.nodes.dict.keys()
     shape_use = _shape_use_counts(draw_calls)
-
-    def any_tri(tris: list[Triangle], f: Callable[[Vertex], bool]) -> bool:
-        return any(f(v) for tri in tris for v in tri)
-
-    def key(pos: tuple[float, float, float]) -> tuple[float, float, float]:
-        return (round(pos[0], 5), round(pos[1], 5), round(pos[2], 5))
 
     for dc in draw_calls:
         if dc.tri_end <= dc.tri_start:
             continue
 
         call_tris = tris[dc.tri_start:dc.tri_end]
-        has_uv = any_tri(call_tris, lambda v: v.uv is not None)
-        has_nrm = any_tri(call_tris, lambda v: v.normal is not None)
-        has_col = any_tri(call_tris, lambda v: v.color is not None)
-
-        mesh = ImportedMesh(f"shape{dc.shape}" if dc.shape >= 0 else "calldl")
-        mesh.material = dc.material
-        mesh.has_uv = has_uv
-        mesh.has_normals = has_nrm
-        mesh.has_colors = has_col
-
-        index_of = {}
-        for tri in call_tris:
-            face: list[int] = []
-            for v in tri:
-                k = key(v.pos)
-                idx = index_of.get(k)
-                if idx is None:
-                    idx = len(mesh.vertices)
-                    index_of[k] = idx
-                    mesh.vertices.append(v.pos)
-                    mesh.vertex_bone.append(v.node)
-                face.append(idx)
-
-            if face[0] == face[1] or face[1] == face[2] or face[0] == face[2]:
-                continue
-
-            mesh.faces.append((face[0], face[1], face[2]))
-            for v in tri:
-                if has_uv:
-                    mesh.loop_uvs.append(
-                        v.uv if v.uv is not None else (0.0, 0.0))
-                if has_nrm:
-                    mesh.loop_normals.append(
-                        v.normal if v.normal is not None else (0.0, 0.0, 1.0))
-                if has_col:
-                    mesh.loop_colors.append(
-                        v.color if v.color is not None else (1.0, 1.0, 1.0))
-        if not mesh.faces:
-            continue
-        meshes.append(mesh)
+        name = f"shape{dc.shape}" if dc.shape >= 0 else "calldl"
+        mesh = _build_mesh(name, dc.material, call_tris)
+        if mesh is not None:
+            meshes.append(mesh)
 
     return meshes
+
+
+def _build_mesh(name: str, material: int, tris: list[Triangle]) -> ImportedMesh | None:
+    def any_tri(ts: list[Triangle], f: Callable[[Vertex], bool]) -> bool:
+        return any(f(v) for tri in ts for v in tri)
+
+    def key(pos: tuple[float, float, float]) -> tuple[float, float, float]:
+        return (round(pos[0], 5), round(pos[1], 5), round(pos[2], 5))
+
+    has_uv = any_tri(tris, lambda v: v.uv is not None)
+    has_nrm = any_tri(tris, lambda v: v.normal is not None)
+    has_col = any_tri(tris, lambda v: v.color is not None)
+
+    mesh = ImportedMesh(name, material=material, has_uv=has_uv,
+                        has_normals=has_nrm, has_colors=has_col)
+
+    index_of: dict[tuple, int] = {}
+    for tri in tris:
+        keys = [key(v.pos) for v in tri]
+        if len(set(keys)) < 3:
+            continue  # Degenerate face
+
+        for v, k in zip(tri, keys):
+            if k not in index_of:
+                index_of[k] = len(mesh.vertices)
+                mesh.vertices.append(v.pos)
+                mesh.vertex_bone.append(v.node)
+        mesh.faces.append(tuple(index_of[k] for k in keys))
+
+        for v in tri:
+            if has_uv:
+                mesh.loop_uvs.append(
+                    v.uv if v.uv is not None else (0.0, 0.0))
+            if has_nrm:
+                mesh.loop_normals.append(
+                    v.normal if v.normal is not None else (0.0, 0.0, 1.0))
+            if has_col:
+                mesh.loop_colors.append(
+                    v.color if v.color is not None else (1.0, 1.0, 1.0))
+
+    return mesh if mesh.faces else None
 
 
 def _shape_use_counts(draw_calls: list[DrawCall]) -> dict[int, int]:
@@ -201,14 +207,13 @@ def _shape_use_counts(draw_calls: list[DrawCall]) -> dict[int, int]:
 
 
 class MaterialBuilder:
-    def __init__(self, model: Model, tex_set: TEX0 | None, out_textures: dict[str, DecodedTexture]):
+    def __init__(self, model: Model, tex_set: TEX0 | None, tex_cache: TextureCache, out_textures: dict[str, DecodedTexture]):
         self.model = model
         self.tex_set = tex_set
-        self.tex_cache: dict[tuple[str, str], DecodedTexture] = {}
+        self.tex_cache = tex_cache
         self.textures = out_textures
 
     def build(self) -> list[ImportedMaterial]:
-        from .mdl0 import MatFlag
         mats: list[ImportedMaterial] = []
         names = self.model.materials.dict.keys()
         for i, m in enumerate(self.model.materials):
@@ -226,7 +231,7 @@ class MaterialBuilder:
             mats.append(im)
         return mats
 
-    def _resolve_texture(self, tex_name: str, pal_name: str) -> DecodedTexture | None:
+    def _resolve_texture(self, tex_name: str, pal_name: str | None) -> DecodedTexture | None:
         ckey = (tex_name, pal_name)
         if ckey in self.tex_cache:
             return self.tex_cache[ckey]
@@ -242,15 +247,17 @@ class MaterialBuilder:
         w, h, rgba = texture.decode_texture(entry, pal_bytes)
         has_alpha = entry.fmt.has_alpha() or entry.transparent_color
 
-        disp_name = tex_name if pal_name in (
-            None, tex_name) else f"{tex_name}.{pal_name}"
+        disp_name = self._display_name(tex_name, pal_name)
         dt = DecodedTexture(disp_name, w, h, rgba, has_alpha)
 
         self.tex_cache[ckey] = dt
         self.textures[disp_name] = dt
         return dt
 
-    def _find_palette_bytes(self, pal_name: str) -> bytes:
+    def _display_name(self, tex: str, pal: str | None) -> str:
+        return tex if pal in (None, tex) else f"{tex}.{pal}"
+
+    def _find_palette_bytes(self, pal_name: str | None) -> bytes:
         if pal_name is None:
             return b""
         entry = self.tex_set.pltt_dict[pal_name]
