@@ -1,7 +1,7 @@
 import struct
 
 from nitro.binary import BinaryReader, BinaryWriter
-from nitro.dictionary import Dictionary
+from nitro.dictionary import Dictionary, read_dictionary
 from nitro.tex0 import (PlttDictData, PlttInfo, TEX0, Tex4x4Info, TexDictData,
                         TexFmt, TexInfo)
 
@@ -48,6 +48,25 @@ class TestPlttInfo:
         original.write(w)
 
         assert w.get_bytes() == raw
+
+    def test_flags_precede_the_dictionary_offset(self):
+        # Unlike TexInfo, PlttInfo stores flags first. Reading them the other
+        # way round meant the dictionary offset was mistaken for flags, and
+        # writing zeroed a real flag bit (0x8000 in some retail files).
+        raw = struct.pack("<IHHHHI", 0, 3, 0x8000, 132, 0, 300)
+        info = PlttInfo(BinaryReader(raw))
+        assert info.flags == 0x8000
+        assert info.dict_offset == 132
+
+    def test_write_preserves_a_flag_bit(self):
+        raw = struct.pack("<IHHHHI", 0, 3, 0x8000, 132, 0, 300)
+        original = PlttInfo(BinaryReader(raw))
+
+        w = BinaryWriter()
+        original.write(w)
+
+        assert w.get_bytes() == raw
+        assert PlttInfo(BinaryReader(w.get_bytes())).flags == 0x8000
 
 
 class TestTexDictData:
@@ -124,6 +143,32 @@ class TestTEX0:
         assert out.tex_dict.values()[0].data == original.tex_dict.values()[0].data
         assert out.pltt_dict.names == ["pltt0"]
         assert out.pltt_dict.values()[0].data == original.pltt_dict.values()[0].data
+
+    def test_write_points_pltt_dict_offset_at_the_palette_dictionary(self):
+        # The offset must be where the palette dictionary actually lands, not 0.
+        original = build_tex0()
+
+        w = BinaryWriter()
+        original.write(w)
+        out = TEX0(BinaryReader(w.get_bytes()))
+
+        tex_count = len(original.tex_dict)
+        expected = 60 + 8 + (tex_count + 1) * 4 + 4 + tex_count * 8 + tex_count * 16
+        assert out.pltt_info.dict_offset == expected
+
+        # and the dictionary really is there
+        r = BinaryReader(w.get_bytes())
+        r.seek(out.pltt_info.dict_offset)
+        assert read_dictionary(r, lambda rd: PlttDictData(rd)).names == ["pltt0"]
+
+    def test_write_preserves_pltt_flags(self):
+        original = build_tex0()
+        original.pltt_info.flags = 0x8000
+
+        w = BinaryWriter()
+        original.write(w)
+
+        assert TEX0(BinaryReader(w.get_bytes())).pltt_info.flags == 0x8000
 
     def test_write_deduplicates_shared_texture_data(self):
         data = bytes(range(64))

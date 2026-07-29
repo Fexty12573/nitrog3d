@@ -136,8 +136,7 @@ class TEX0:
         self.tex4x4_info.tex_pltt_idx_offset = pos_data + \
             len(tex_pool) + len(tex4x4_pool)
 
-        # TODO: take a closer look at this
-        self.pltt_info.dict_offset = 0
+        self.pltt_info.dict_offset = pos_pltt_dict
         self.pltt_info.pltt_size = len(pltt_pool)
         self.pltt_info.pltt_offset = pos_data + \
             len(tex_pool) + len(tex4x4_pool) + len(tex4x4_idx_pool)
@@ -191,19 +190,25 @@ class Tex4x4Info(TexInfo):
 
 
 class PlttInfo:
+    """Palette set header.
+
+    Note the field order differs from TexInfo: the flags come *before* the
+    dictionary offset here, where TexInfo has them the other way round.
+    """
+
     def __init__(self, r: BinaryReader):
         self.vram_key = r.read_u32()
         self.pltt_size = r.read_u16() << 3
-        self.dict_offset = r.read_u16()
         self.flags = r.read_u16()
+        self.dict_offset = r.read_u16()
         r.skip(2)
         self.pltt_offset = r.read_u32()
 
     def write(self, w: BinaryWriter):
         w.write_u32(self.vram_key)
         w.write_u16(self.pltt_size >> 3)
-        w.write_u16(self.dict_offset)
         w.write_u16(self.flags)
+        w.write_u16(self.dict_offset)
         w.write_u16(0)
         w.write_u32(self.pltt_offset)
 

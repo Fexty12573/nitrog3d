@@ -34,7 +34,8 @@ class ImportedMesh:
     vertices: list[tuple[float, float, float]] = field(default_factory=list)
     faces: list[tuple[int, int, int]] = field(default_factory=list)
     loop_uvs: list[tuple[float, float]] = field(default_factory=list)
-    loop_normals: list[tuple[float, float, float]] = field(default_factory=list)
+    loop_normals: list[tuple[float, float, float]
+                       ] = field(default_factory=list)
     loop_colors: list[tuple[float, float, float]] = field(default_factory=list)
     vertex_bone: list[int] = field(default_factory=list)
     material: int = -1
@@ -200,7 +201,7 @@ def _shape_use_counts(draw_calls: list[DrawCall]) -> dict[int, int]:
 
 
 class MaterialBuilder:
-    def __init__(self, model: Model, tex_set: TEX0, out_textures: dict[str, DecodedTexture]):
+    def __init__(self, model: Model, tex_set: TEX0 | None, out_textures: dict[str, DecodedTexture]):
         self.model = model
         self.tex_set = tex_set
         self.tex_cache: dict[tuple[str, str], DecodedTexture] = {}
