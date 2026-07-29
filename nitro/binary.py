@@ -210,6 +210,51 @@ def read_u32_le(buf: bytes | bytearray, offset: int) -> int:
     return struct.unpack_from("<I", buf, offset)[0]
 
 
+def read_u16_le(buf: bytes | bytearray, offset: int) -> int:
+    """Read a 16-bit unsigned integer from a buffer at the given offset"""
+    return struct.unpack_from("<H", buf, offset)[0]
+
+
 def sign_extend(v: int, bits: int) -> int:
     mask = 1 << (bits - 1)
     return (v & (mask - 1)) - (v & mask)
+
+
+def s16(v: int) -> int:
+    return sign_extend(v & 0xFFFF, 16)
+
+
+def s32(v: int) -> int:
+    return sign_extend(v & 0xFFFFFFFF, 32)
+
+
+def fx16(v: int) -> float:
+    return s16(v) / FX16_SCALE
+
+
+def fx32(v: int) -> float:
+    return s32(v) / FX32_SCALE
+
+
+def expand5(v: int) -> int:
+    return (v * 255 + 15) // 31
+
+
+def unpack3x10(v: int) -> tuple[int, int, int]:
+    return (
+        sign_extend(v & 0x3FF, 10),
+        sign_extend((v >> 10) & 0x3FF, 10),
+        sign_extend((v >> 20) & 0x3FF, 10)
+    )
+
+
+def extract_bgr555(bgr: int) -> tuple[int, int, int]:
+    b = expand5((bgr >> 10) & 0x1F)
+    g = expand5((bgr >> 5) & 0x1F)
+    r = expand5(bgr & 0x1F)
+    return (r, g, b)
+
+
+def bgr555_to_float(bgr: int) -> tuple[float, float, float]:
+    (r, g, b) = extract_bgr555(bgr)
+    return (r / 255.0, g / 255.0, b / 255.0)

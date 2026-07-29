@@ -446,6 +446,9 @@ class MaterialSet:
                 return name
         return None
 
+    def __iter__(self):
+        return self.materials.__iter__()
+
     def __len__(self) -> int:
         return len(self.materials)
 

@@ -1,6 +1,6 @@
 
 from __future__ import annotations
-from .binary import FX16_SCALE, FX32_SCALE, sign_extend, read_u32_le
+from .binary import *
 from . import matrix as mat
 import numpy as np
 from enum import IntEnum
@@ -248,10 +248,10 @@ class GeometryBuilder:
         self.mul(mat.translate(x, y, z))
 
     def color(self, rgb: int):
-        self.last_col = _bgr555_to_float(rgb)
+        self.last_col = bgr555_to_float(rgb)
 
     def normal(self, packed: int):
-        (nx, ny, nz) = tuple(map(lambda x: x * _NORMAL_SCALE, _unpack3x10(packed)))
+        (nx, ny, nz) = tuple(map(lambda x: x * _NORMAL_SCALE, unpack3x10(packed)))
         n = mat.mul_no_translate((nx, ny, nz), self.cur_dir)
         self.cur_nrm = n
         if self.tex_gen == TexGen.NORMAL:
@@ -263,8 +263,8 @@ class GeometryBuilder:
             self.cur_uv = (u, v)
 
     def texcoord(self, packed: int):
-        s = _s16(packed) * _TEXCOORD_SCALE
-        t = _s16(packed >> 16) * _TEXCOORD_SCALE
+        s = s16(packed) * _TEXCOORD_SCALE
+        t = s16(packed >> 16) * _TEXCOORD_SCALE
         self.last_tex = (s, t)
         if self.tex_gen == TexGen.NONE:
             self.cur_uv = (s / self.tex_width, t / self.tex_height)
@@ -301,7 +301,7 @@ class GeometryBuilder:
         self._vertex((x, y, z))
 
     def vertex10(self, v: int):
-        (x, y, z) = tuple(map(lambda x: x * _VERTEX10_SCALE, _unpack3x10(v)))
+        (x, y, z) = tuple(map(lambda x: x * _VERTEX10_SCALE, unpack3x10(v)))
         self._vertex((x, y, z))
 
     def vertex_xy(self, v: int):
@@ -314,7 +314,7 @@ class GeometryBuilder:
         self._vertex((self.last_vtx[0], fx16(v), fx16(v >> 16)))
 
     def vertex_diff(self, v: int):
-        (dx, dy, dz) = tuple(map(lambda x: x / FX16_SCALE, _unpack3x10(v)))
+        (dx, dy, dz) = tuple(map(lambda x: x / FX16_SCALE, unpack3x10(v)))
         self._vertex(
             (self.last_vtx[0] + dx, self.last_vtx[1] + dy, self.last_vtx[2] + dz))
 
@@ -328,43 +328,8 @@ class GeometryBuilder:
         return self._first_dir if self._first_dir is not None else self.cur_dir
 
 
-def _s16(v: int) -> int:
-    return sign_extend(v & 0xFFFF, 16)
-
-
-def _s32(v: int) -> int:
-    return sign_extend(v & 0xFFFFFFFF, 32)
-
-
-def fx16(v: int) -> float:
-    return _s16(v) / FX16_SCALE
-
-
-def fx32(v: int) -> float:
-    return _s32(v) / FX32_SCALE
-
-
 def _fx32list(vs: list[int]) -> list[float]:
     return list(map(fx32, vs))
-
-
-def _expand5(v: int) -> int:
-    return (v * 255 + 15) // 31
-
-
-def _unpack3x10(v: int) -> tuple[int, int, int]:
-    return (
-        sign_extend(v & 0x3FF, 10),
-        sign_extend((v >> 10) & 0x3FF, 10),
-        sign_extend((v >> 20) & 0x3FF, 10)
-    )
-
-
-def _bgr555_to_float(rgb: int) -> tuple[float, float, float]:
-    b = _expand5((rgb >> 10) & 0x1F)
-    g = _expand5((rgb >> 5) & 0x1F)
-    r = _expand5(rgb & 0x1F)
-    return (r / 255.0, g / 255.0, b / 255.0)
 
 
 class DlCmd(IntEnum):

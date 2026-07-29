@@ -91,10 +91,13 @@ class Dictionary[T]:
         except ValueError:
             return -1
 
-    def __getitem__(self, key):
-        if isinstance(key, str):
-            return self.data[self.names.index(key)]
-        return self.data[key]
+    def __getitem__(self, key) -> T | None:
+        try:
+            if isinstance(key, str):
+                return self.data[self.names.index(key)]
+            return self.data[key]
+        except ValueError:
+            return None
 
     def keys(self) -> list[str]:
         return self.names

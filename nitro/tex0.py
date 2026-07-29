@@ -14,6 +14,9 @@ class TexFmt(IntEnum):
     A5I3 = 6
     DIRECT = 7
 
+    def has_alpha(self) -> bool:
+        return self in (self.A3I5, self.A5I3, self.COMP4X4, self.DIRECT)
+
 
 _DATA_BITS = [
     0,  # NONE
@@ -211,7 +214,7 @@ class TexDictData:
         self.tex_image_param = r.read_u16()
         self.s = 8 << ((self.tex_image_param >> 4) & 0x7)
         self.t = 8 << ((self.tex_image_param >> 7) & 0x7)
-        self.fmt = (self.tex_image_param >> 10) & 0x7
+        self.fmt = TexFmt((self.tex_image_param >> 10) & 0x7)
         self.transparent_color = ((self.tex_image_param >> 13) & 1) == 1
         self.extra_param = r.read_u32()
         self.data = b""
