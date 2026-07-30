@@ -1,0 +1,28 @@
+schema_version = "1.0.0"
+
+id = "nitrog3d"
+version = "0.1.0"
+name = "nitrog3d"
+tagline = "Work with Nintendo DS Nitro 3D file formats"
+maintainer = "Fexty"
+type = "add-on"
+
+website = "https://github.com/Fexty12573/nitrog3d"
+tags = ["Import-Export"]
+
+blender_version_min = "4.2.0"
+
+license = ["MIT"]
+
+[build]
+paths_exclude_pattern = [
+    "__pycache__/",
+    "*.pyc",
+    "/.git/",
+    "/.gitignore",
+    "/.gitattributes",
+    "/tools/",
+    "/tests/",
+    "/pytest.ini",
+    "*.zip",
+]

@@ -2,7 +2,7 @@
 from __future__ import annotations
 from .binary import BinaryReader, BinaryWriter
 from collections.abc import Callable
-from typing import Any, TypeVar
+from typing import Any, Generic, TypeVar
 
 T = TypeVar('T')
 
@@ -61,7 +61,7 @@ def write_dictionary(w: BinaryWriter, dict: Dictionary[T], write_data: Callable[
     w.patch_u16(pos_size, w.tell() - start)
 
 
-class Dictionary[T]:
+class Dictionary(Generic[T]):
     """
     An NSBMD Dictionary
     """

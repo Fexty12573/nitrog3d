@@ -14,8 +14,6 @@ from .sbc import SbcInterpreter, DrawCall
 @dataclass(slots=True)
 class ImportedModel:
     models: list[ImportedSubModel] = field(default_factory=list)
-    # Keyed by display name so a texture shared by several materials is
-    # decoded and stored once.
     textures: dict[str, DecodedTexture] = field(default_factory=dict)
     anims: list[ImportedAnim] = field(default_factory=list)
 

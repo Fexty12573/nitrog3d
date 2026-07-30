@@ -5,7 +5,7 @@ from . import matrix as mat
 import numpy as np
 from enum import IntEnum
 from dataclasses import dataclass
-from itertools import batched
+from itertools import islice
 from typing import Callable
 
 
@@ -115,13 +115,13 @@ class GeometryBuilder:
             case PrimType.TRIANGLES:
                 self.num_triangles += len(verts) // 3
                 # An incomplete trailing primitive is discarded, as on hardware
-                for group in batched(verts, 3):
+                for group in _batched(verts, 3):
                     if len(group) == 3:
                         self.triangles.append(group)
 
             case PrimType.QUADS:
                 self.num_quads += len(verts) // 4
-                for group in batched(verts, 4):
+                for group in _batched(verts, 4):
                     if len(group) == 4:
                         a, b, c, d = group
                         self.triangles.append((a, b, c))
@@ -330,6 +330,12 @@ class GeometryBuilder:
 
 def _fx32list(vs: list[int]) -> list[float]:
     return list(map(fx32, vs))
+
+
+def _batched(iterable, n):
+    it = iter(iterable)
+    while batch := tuple(islice(it, n)):
+        yield batch
 
 
 class DlCmd(IntEnum):
