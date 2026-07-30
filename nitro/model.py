@@ -175,6 +175,7 @@ def _build_mesh(name: str, material: int, tris: list[Triangle]) -> ImportedMesh 
         if len(set(keys)) < 3:
             continue  # Degenerate face
 
+        keys = [(*k, v.node) for k, v in zip(keys, tri)]
         for v, k in zip(tri, keys):
             if k not in index_of:
                 index_of[k] = len(mesh.vertices)

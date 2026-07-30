@@ -73,6 +73,9 @@ class GeometryBuilder:
         self.cur_uv: tuple[float, float] | None = None
 
         self.current_bound_node = 0
+
+        # Maps matrix stack index -> node id
+        self.stack_to_node: dict[int, int] = {}
         self.triangles: list[Triangle] = []
 
         self._prim_type: PrimType | None = None
@@ -206,8 +209,16 @@ class GeometryBuilder:
 
     def restore_mtx(self, index: int):
         index &= _MTX_STACK_MASK
-        for name, stack in self._stack_targets():
+        targets = self._stack_targets()
+        for name, stack in targets:
             setattr(self, name, stack[index])
+
+        if targets:
+            # A shape with SHPFLAG_USE_RESTOREMTX rebinds the matrix in its own DL.
+            # The bound node has to change accordingly, or every vertex in the shape
+            # will be bound to a single bone
+            self.current_bound_node = self.stack_to_node.get(
+                index, self.current_bound_node)
 
     def identity(self):
         self._apply(lambda _: np.identity(4))

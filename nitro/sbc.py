@@ -81,7 +81,9 @@ class SbcInterpreter:
         self.node_world = [mat.identity() for _ in range(n)]
         self.node_seen = [False] * n
 
-        self.stack_to_node: dict[int, int] = {}
+        # Shared with builder now so shape DLs can adjust the bound node
+        # when running a RestoreMtx command
+        self.stack_to_node: dict[int, int] = builder.stack_to_node
         self.current_node = -1
         self.current_mat = 0
         self.draw_calls: list[DrawCall] = []
@@ -179,13 +181,17 @@ class SbcInterpreter:
 
     def _draw_call(self, dl: bytes | bytearray, shape: int):
         b = self.builder
-        b.current_bound_node = max(self.current_node, 0)
+
+        # Using the current node from *before* running the DL as it can now modify the bound node
+        node = max(self.current_node, 0)
+        b.current_bound_node = node
         start = len(b.triangles)
         b.run_dl(dl)
+
         self.draw_calls.append(DrawCall(
             shape,
             self.current_mat,
-            b.current_bound_node,
+            node,
             start,
             len(b.triangles),
             b.get_pos_mtx(),
