@@ -128,7 +128,7 @@ class TestControlFlow:
         assert interp.node_seen == [True]
 
     @pytest.mark.parametrize("cmd", [SbcCmd.NODE, SbcCmd.ENVMAP, SbcCmd.PRJMAP])
-    def test_three_byte_commands_skip_their_operands(self, cmd):
+    def test_three_byte_commands_consume_their_operands(self, cmd):
         sbc = bytes([cmd, 0xFF, 0xFF]) + nodedesc(0) + bytes([SbcCmd.RET])
         interp = interpret(sbc)
         assert interp.node_seen == [True]
@@ -137,8 +137,116 @@ class TestControlFlow:
         interp = interpret(b"", nodes=[node(), node()])
         assert interp.current_node == -1
         assert interp.current_mat == 0
+        assert interp.current_draw_node == -1
         assert interp.node_parent == [-1, -1]
         assert interp.stack_to_node == {}
+        assert interp.node_visible == [True, True]
+        assert interp.billboard_nodes == {}
+        assert interp.tex_gen_cmds == []
+
+
+def sbc_node(node_id: int, visible: bool = True) -> bytes:
+    """SBC_NODE: opcode, node id, visibility (bit 0)."""
+    return bytes([SbcCmd.NODE, node_id, int(visible)])
+
+
+class TestNode:
+    """SBC_NODE names the node that the following draw commands belong to.
+
+    The interpreter used to skip the command wholesale, dropping both operands.
+    An exporter has to reproduce them, so they are now recorded.
+    """
+
+    def test_records_the_visibility_bit_per_node(self):
+        sbc = sbc_node(1, visible=False) + bytes([SbcCmd.RET])
+        interp = interpret(sbc, nodes=[node(), node()])
+        assert interp.node_visible == [True, False]
+
+    def test_visible_node_stays_visible(self):
+        interp = interpret(sbc_node(0, visible=True) + bytes([SbcCmd.RET]))
+        assert interp.node_visible == [True]
+
+    @pytest.mark.parametrize("byte,visible", [
+        (0x00, False), (0x01, True), (0xFE, False), (0xFF, True),
+    ])
+    def test_only_bit_zero_of_the_visibility_operand_counts(self, byte, visible):
+        # G3D_BinaryFormat.pdf spells the operand "--- --- --- --- --- --- --- V",
+        # and sbc.c reads `*(rs->c + 2) & 1`, so the upper bits are reserved.
+        sbc = bytes([SbcCmd.NODE, 0, byte, SbcCmd.RET])
+        interp = interpret(sbc)
+        assert interp.node_visible == [visible]
+        assert interp.current_visible is visible
+
+    def test_records_the_node_id_separately_from_the_current_matrix_node(self):
+        # The runtime keeps NNSG3dRS::currentNode (set by NODE) apart from
+        # currentNodeDesc (whose matrix is loaded). Conflating them would bind
+        # a skinned mesh's vertices to the mesh node instead of the joints.
+        sbc = nodedesc(0) + sbc_node(1) + bytes([SbcCmd.RET])
+        interp = interpret(sbc, nodes=[node(), node()])
+        assert interp.current_draw_node == 1
+        assert interp.current_node == 0
+
+    def test_out_of_range_node_id_is_ignored_but_still_consumed(self):
+        sbc = sbc_node(9, visible=False) + nodedesc(0) + bytes([SbcCmd.RET])
+        interp = interpret(sbc)
+        assert interp.node_visible == [True]
+        assert interp.current_draw_node == 9
+        assert interp.node_seen == [True]
+
+    def test_draw_calls_carry_the_visibility_in_force(self):
+        sbc = (sbc_node(0, visible=False) + bytes([SbcCmd.SHP, 0])
+               + sbc_node(0, visible=True) + bytes([SbcCmd.SHP, 0, SbcCmd.RET]))
+        interp = interpret(sbc)
+        assert [c.visible for c in interp.draw_calls] == [False, True]
+
+    def test_geometry_of_a_hidden_node_is_still_imported(self):
+        # The hardware would skip it; dropping it here would lose data the
+        # exporter has to write back.
+        b = GeometryBuilder()
+        sbc = sbc_node(0, visible=False) + bytes([SbcCmd.SHP, 0, SbcCmd.RET])
+        interpret(sbc, builder=b)
+        assert len(b.triangles) == 1
+
+    def test_a_later_node_command_overrides_an_earlier_one(self):
+        sbc = sbc_node(0, visible=False) + sbc_node(0, True) + bytes([SbcCmd.RET])
+        interp = interpret(sbc)
+        assert interp.node_visible == [True]
+
+    def test_consumes_three_bytes(self):
+        sbc = sbc_node(0) + nodedesc(0) + bytes([SbcCmd.RET])
+        interp = interpret(sbc)
+        assert interp.node_seen == [True]
+
+
+class TestTexGenCommands:
+    """ENVMAP / PRJMAP carry a material ID plus a reserved flag byte."""
+
+    @pytest.mark.parametrize("cmd", [SbcCmd.ENVMAP, SbcCmd.PRJMAP])
+    def test_records_material_and_flag(self, cmd):
+        sbc = bytes([cmd, 1, 0, SbcCmd.RET])
+        interp = interpret(sbc, materials=[material(), material()])
+        assert len(interp.tex_gen_cmds) == 1
+        rec = interp.tex_gen_cmds[0]
+        assert (rec.cmd, rec.material, rec.flag) == (cmd, 1, 0)
+
+    @pytest.mark.parametrize("cmd", [SbcCmd.ENVMAP, SbcCmd.PRJMAP])
+    def test_keeps_the_flag_byte_verbatim(self, cmd):
+        # The format calls it "flag for expansion (currently always 0)", so a
+        # non-zero value is news; don't silently mask it away.
+        interp = interpret(bytes([cmd, 0, 0x80, SbcCmd.RET]))
+        assert interp.tex_gen_cmds[0].flag == 0x80
+
+    def test_records_both_kinds_in_stream_order(self):
+        sbc = (bytes([SbcCmd.MAT, 0, SbcCmd.ENVMAP, 0, 0])
+               + bytes([SbcCmd.MAT, 1, SbcCmd.PRJMAP, 1, 0, SbcCmd.RET]))
+        interp = interpret(sbc, materials=[material(), material()])
+        assert [(r.cmd, r.material) for r in interp.tex_gen_cmds] == [
+            (SbcCmd.ENVMAP, 0), (SbcCmd.PRJMAP, 1)]
+
+    def test_does_not_disturb_the_current_material(self):
+        sbc = bytes([SbcCmd.MAT, 1, SbcCmd.ENVMAP, 0, 0, SbcCmd.RET])
+        interp = interpret(sbc, materials=[material(), material()])
+        assert interp.current_mat == 1
 
 
 class TestNodeDesc:
@@ -559,7 +667,7 @@ class TestBillboard:
             True], "billboard consumed the wrong byte count"
 
     @pytest.mark.parametrize("cmd", [SbcCmd.BB, SbcCmd.BBY])
-    def test_store_flag_maps_stack_slot_to_current_node(self, cmd):
+    def test_store_flag_maps_stack_slot_to_the_billboard_node(self, cmd):
         sbc = nodedesc(
             0) + bytes([cmd | SbcOpt.STORE, 0, 6]) + bytes([SbcCmd.RET])
         interp = interpret(sbc)
@@ -574,14 +682,98 @@ class TestBillboard:
         interp = interpret(sbc, nodes=[node(), node()])
         assert interp.current_node == 0
 
+    @pytest.mark.parametrize("cmd,kind", [(SbcCmd.BB, SbcCmd.BB),
+                                          (SbcCmd.BBY, SbcCmd.BBY)])
+    def test_records_which_nodes_are_billboards_and_of_which_kind(self, cmd, kind):
+        # The node's own NodeData carries no billboard flag -- screen-aligned vs
+        # Y-axis-only is only ever stated by the choice of SBC opcode, so an
+        # exporter can't recover it from anywhere else.
+        sbc = nodedesc(0) + nodedesc(1) + bytes([cmd, 1, SbcCmd.RET])
+        interp = interpret(sbc, nodes=[node(), node()])
+        assert interp.billboard_nodes == {1: kind}
+
+    @pytest.mark.parametrize("cmd", [SbcCmd.BB, SbcCmd.BBY])
+    def test_node_id_operand_is_read_and_not_confused_with_the_stack_slot(self, cmd):
+        # The operand order is NodeID first, then the optional stack indices --
+        # reading the store slot as the node id would give {2: ...} here.
+        sbc = nodedesc(0) + nodedesc(1) + \
+            bytes([cmd | SbcOpt.STORE, 0, 2, SbcCmd.RET])
+        interp = interpret(sbc, nodes=[node(), node()])
+        assert interp.billboard_nodes == {0: cmd}
+        assert interp.stack_to_node == {2: 0}
+
+    @pytest.mark.parametrize("cmd", [SbcCmd.BB, SbcCmd.BBY])
+    def test_node_id_wins_over_the_restored_slot_for_the_current_node(self, cmd):
+        # Stack slot 2 holds node 0, but the command names node 1: the matrix
+        # being billboarded is node 1's, so that is what the slot ends up bound
+        # to. Reading the operand is the only way to get this right.
+        sbc = (nodedesc(0, SbcOpt.STORE, store=2)
+               + nodedesc(1)
+               + bytes([cmd | SbcOpt.STORE | SbcOpt.RESTORE, 1, 3, 2])
+               + bytes([SbcCmd.RET]))
+        interp = interpret(sbc, nodes=[node(), node()])
+        assert interp.current_node == 1
+        assert interp.stack_to_node == {2: 0, 3: 1}
+
+    @pytest.mark.parametrize("cmd", [SbcCmd.BB, SbcCmd.BBY])
+    def test_out_of_range_node_id_falls_back_to_the_restored_slot(self, cmd):
+        sbc = (nodedesc(0, SbcOpt.STORE, store=2)
+               + nodedesc(1)
+               + bytes([cmd | SbcOpt.RESTORE, 9, 2])
+               + bytes([SbcCmd.RET]))
+        interp = interpret(sbc, nodes=[node(), node()])
+        assert interp.billboard_nodes == {}
+        assert interp.current_node == 0
+
+
+def nodemix(dest: int, *terms: tuple[int, int, int]) -> bytes:
+    """SBC_NODEMIX: dest stack slot, term count, then (stack, node, ratio)*.
+
+    Ratio is an 8-bit fraction over 256, so the ratios of a full-weight blend
+    sum to 256 and no single term can carry full weight -- hence the SDK's
+    NNS_G3D_ASSERT(numMtx >= 2). `terms` here therefore normally has >= 2
+    entries, matching what g3dcvtr emits.
+    """
+    out = bytes([SbcCmd.NODEMIX, dest, len(terms)])
+    for stack, node, ratio in terms:
+        out += bytes([stack, node, ratio])
+    return out
+
+
+HALF = 128   # 128/256 == exactly 0.5, so two of them are full weight
+
 
 class TestNodeMix:
     def test_identity_envelope_and_stack_yields_identity(self):
-        sbc = bytes([SbcCmd.NODEMIX, 0, 1, 0, 0, 255, SbcCmd.RET])
         b = GeometryBuilder()
-        interpret(sbc, envelopes=[envelope()], builder=b)
+        interpret(nodemix(0, (0, 0, HALF), (0, 0, HALF)) + bytes([SbcCmd.RET]),
+                  envelopes=[envelope()], builder=b)
         assert b.cur_pos == pytest.approx(np.identity(4))
         assert b.cur_dir == pytest.approx(np.identity(4))
+
+    def test_ratio_is_a_fraction_of_256_not_255(self):
+        # Ratio_N is 0.8 fixed point: the SDK computes `w = ratio << 4` as an
+        # fx32 (FX32_SHIFT == 12), i.e. ratio/256. g3dcvtr confirms it -- the
+        # SDK's own evp_wgt.imd sample turns IMD weight pairs like "95 5" into
+        # ratios 243/13, which sum to 256 exactly, never to 255.
+        b = GeometryBuilder()
+        b.pos_stack[0] = mat.from4x3(
+            [1, 0, 0, 0, 1, 0, 0, 0, 1, 256.0, 0.0, 0.0])
+        interpret(nodemix(0, (0, 0, 1), (0, 0, 1)) + bytes([SbcCmd.RET]),
+                  envelopes=[envelope()], builder=b)
+        # two terms of 1/256 each -> 2.0, not 2 * 256/255 == 2.008
+        assert mat.mul((0.0, 0.0, 0.0), b.cur_pos)[0] == pytest.approx(2.0)
+
+    def test_ratios_summing_to_256_preserve_the_blended_matrix(self):
+        # A real g3dcvtr blend: IMD "95 5" -> 243/13. The two stack matrices
+        # here are the same, so any correctly normalised scale returns it intact.
+        b = GeometryBuilder()
+        m = mat.from4x3([1, 0, 0, 0, 1, 0, 0, 0, 1, 7.0, 0.0, 0.0])
+        b.pos_stack[0] = b.pos_stack[1] = m
+        interpret(nodemix(2, (0, 0, 243), (1, 1, 13)) + bytes([SbcCmd.RET]),
+                  envelopes=[envelope(), envelope()], builder=b)
+        assert mat.mul((0.0, 0.0, 0.0), b.cur_pos) == pytest.approx(
+            (7.0, 0.0, 0.0))
 
     def test_blends_two_stack_matrices_by_weight(self):
         b = GeometryBuilder()
@@ -589,13 +781,10 @@ class TestNodeMix:
             [1, 0, 0, 0, 1, 0, 0, 0, 1, 0.0, 0.0, 0.0])
         b.pos_stack[1] = mat.from4x3(
             [1, 0, 0, 0, 1, 0, 0, 0, 1, 4.0, 0.0, 0.0])
-        # two terms, half weight each (128/255 ~ 0.502)
-        sbc = bytes([SbcCmd.NODEMIX, 5, 2, 0, 0, 128, 1, 1, 128, SbcCmd.RET])
-        interpret(sbc, envelopes=[envelope(), envelope()], builder=b)
-
-        w = 128 / 255.0
+        interpret(nodemix(5, (0, 0, HALF), (1, 1, HALF)) + bytes([SbcCmd.RET]),
+                  envelopes=[envelope(), envelope()], builder=b)
         assert mat.mul((0.0, 0.0, 0.0), b.cur_pos) == pytest.approx(
-            (4.0 * w, 0.0, 0.0))
+            (2.0, 0.0, 0.0))
 
     def test_envelope_inverse_is_applied_to_the_stack_matrix(self):
         b = GeometryBuilder()
@@ -617,8 +806,8 @@ class TestNodeMix:
         b.pos_stack[0] = mat.from4x3(
             [1, 0, 0, 0, 1, 0, 0, 0, 1, 5.0, 0.0, 0.0])
         evp = envelope(inv_m=[*ROT_Z90, 0.0, 0.0, 0.0])
-        sbc = bytes([SbcCmd.NODEMIX, 0, 1, 0, 0, 255, SbcCmd.RET])
-        interpret(sbc, envelopes=[evp], builder=b)
+        interpret(nodemix(0, (0, 0, HALF), (0, 0, HALF)) + bytes([SbcCmd.RET]),
+                  envelopes=[evp], builder=b)
 
         # rotate (1,0,0) to (0,1,0), then translate: (5,1,0).
         # The other order would give (0,6,0).
@@ -635,8 +824,8 @@ class TestNodeMix:
         b = GeometryBuilder()
         b.pos_stack[0] = mat.from4x3(
             [1, 0, 0, 0, 1, 0, 0, 0, 1, 2.0, 0.0, 0.0])
-        sbc = bytes([SbcCmd.NODEMIX, 0, 1, 0, 0, 255, SbcCmd.RET])
-        interpret(sbc, envelopes=None, builder=b)
+        interpret(nodemix(0, (0, 0, HALF), (0, 0, HALF)) + bytes([SbcCmd.RET]),
+                  envelopes=None, builder=b)
         assert mat.mul((0.0, 0.0, 0.0), b.cur_pos) == pytest.approx(
             (2.0, 0.0, 0.0))
 

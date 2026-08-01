@@ -23,6 +23,7 @@ paths_exclude_pattern = [
     "/.gitattributes",
     "/tools/",
     "/tests/",
+    "/data/",
     "/pytest.ini",
     "*.zip",
 ]

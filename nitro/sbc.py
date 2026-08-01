@@ -34,18 +34,7 @@ class SbcOpt(IntFlag):
     RESTORE = 0x40
 
 
-_PIVOT = [
-    [4, 5, 7, 8],
-    [3, 5, 6, 8],
-    [3, 4, 6, 7],
-    [1, 2, 7, 8],
-    [0, 2, 6, 8],
-    [0, 1, 6, 7],
-    [1, 2, 4, 5],
-    [0, 2, 3, 5],
-    [0, 1, 3, 4],
-]
-
+_RATIO_SCALE = 1.0 / 256.0
 _PIVOT_TABLE = [
     [
         [(1, 1), (1, 2), (2, 1), (2, 2)],
@@ -80,12 +69,20 @@ class SbcInterpreter:
         self.node_parent = [-1] * n
         self.node_world = [mat.identity() for _ in range(n)]
         self.node_seen = [False] * n
+        # Nodes are visible by default, only NODE can turn them invisible
+        self.node_visible = [True] * n
+        self.billboard_nodes: dict[int, SbcCmd] = {}
+        self.tex_gen_cmds: list[TexGenCmd] = []
 
         # Shared with builder now so shape DLs can adjust the bound node
         # when running a RestoreMtx command
         self.stack_to_node: dict[int, int] = builder.stack_to_node
         self.current_node = -1
         self.current_mat = 0
+
+        # Node that subsequent draw calls belong to
+        self.current_draw_node = -1
+        self.current_visible = True
         self.draw_calls: list[DrawCall] = []
 
     def run(self):
@@ -107,7 +104,7 @@ class SbcInterpreter:
                 case SbcCmd.RET:
                     break
                 case SbcCmd.NODE:
-                    off += 3
+                    off = self._do_node(off)
                 case SbcCmd.MTX:
                     idx = sbc[off + 1]
                     self.builder.restore_mtx(idx)
@@ -121,17 +118,15 @@ class SbcInterpreter:
                 case SbcCmd.NODEDESC:
                     off = self._do_nodedesc(off, opt)
                 case SbcCmd.BB | SbcCmd.BBY:
-                    off = self._do_billboard(off, opt)
+                    off = self._do_billboard(off, opt, cmd)
                 case SbcCmd.NODEMIX:
                     off = self._do_nodemix(off)
                 case SbcCmd.CALLDL:
                     off = self._do_calldl(off)
                 case SbcCmd.POSSCALE:
                     off = self._do_posscale(off, opt)
-                case SbcCmd.ENVMAP:
-                    off += 3
-                case SbcCmd.PRJMAP:
-                    off += 3
+                case SbcCmd.ENVMAP | SbcCmd.PRJMAP:
+                    off = self._do_texgen(off, cmd)
                 case _:
                     off += 1
 
@@ -196,8 +191,22 @@ class SbcInterpreter:
             len(b.triangles),
             b.get_pos_mtx(),
             b.get_dir_mtx(),
-            b.single_matrix
+            b.single_matrix,
+            self.current_visible
         ))
+
+    def _do_node(self, off: int) -> int:
+        node_id = self.sbc[off + 1]
+        self.current_visible = bool(self.sbc[off + 2] & 1)
+        self.current_draw_node = node_id
+        if 0 <= node_id < len(self.node_visible):
+            self.node_visible[node_id] = self.current_visible
+        return off + 3
+
+    def _do_texgen(self, off: int, cmd: int) -> int:
+        self.tex_gen_cmds.append(
+            TexGenCmd(SbcCmd(cmd), self.sbc[off + 1], self.sbc[off + 2]))
+        return off + 3
 
     def _do_mat(self, off: int) -> int:
         idx = self.sbc[off + 1]
@@ -214,13 +223,17 @@ class SbcInterpreter:
         self._draw_call(self.shapes[idx].dl, idx)
         return off + 2
 
-    def _do_billboard(self, off: int, opt: int) -> int:
+    def _do_billboard(self, off: int, opt: int, cmd: int) -> int:
         b = self.builder
+        node_id = self.sbc[off + 1]
         store, restore, num = self._stack_operands(off, opt, 2)
         if restore is not None:
             b.restore_mtx(restore)
             self.current_node = self.stack_to_node.get(
                 restore, self.current_node)
+        if 0 <= node_id < len(self.nodes):
+            self.billboard_nodes[node_id] = SbcCmd(cmd)
+            self.current_node = node_id
         if store is not None:
             b.store_mtx(store)
             self.stack_to_node[store] = self.current_node
@@ -259,7 +272,7 @@ class SbcInterpreter:
         for term in range(num_terms):
             stack_idx = self.sbc[i]
             evp_idx = self.sbc[i + 1]
-            weight = self.sbc[i + 2] / 255.0
+            weight = self.sbc[i + 2] * _RATIO_SCALE
             if term == 0:
                 first_node = evp_idx
             if self.evp is not None and evp_idx < len(self.evp.m):
@@ -307,3 +320,11 @@ class DrawCall:
     bind_pos: np.ndarray | None = None
     bind_dir: np.ndarray | None = None
     single_mtx: bool | None = None
+    visible: bool = True
+
+
+@dataclass(slots=True)
+class TexGenCmd:
+    cmd: SbcCmd
+    material: int
+    flag: int

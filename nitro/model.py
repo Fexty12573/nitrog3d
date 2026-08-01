@@ -5,7 +5,7 @@ import numpy as np
 from . import texture
 from .binary import bgr555_to_float
 from .nsbmd import NSBMD
-from .mdl0 import Model, MatFlag
+from .mdl0 import Model, MatFlag, Shape
 from .tex0 import TEX0, TexFmt
 from .dl import GeometryBuilder, Triangle, Vertex
 from .sbc import SbcInterpreter, DrawCall
@@ -40,6 +40,10 @@ class ImportedMesh:
     has_uv: bool = False
     has_normals: bool = False
     has_colors: bool = False
+    shape_index: int = -1
+    shape_flags: int = 0
+    bind_pos: list[float] = field(default_factory=list)
+    bind_dir: list[float] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -59,6 +63,10 @@ class DecodedTexture:
     height: int
     rgba: bytes
     has_alpha: bool
+    tex_name: str = None
+    pltt_name: str = None
+    fmt: TexFmt = TexFmt.NONE
+    color0_transparent: bool = False
 
 
 @dataclass(slots=True)
@@ -148,14 +156,14 @@ def _build_meshes(model: Model, builder: GeometryBuilder, draw_calls: list[DrawC
 
         call_tris = tris[dc.tri_start:dc.tri_end]
         name = f"shape{dc.shape}" if dc.shape >= 0 else "calldl"
-        mesh = _build_mesh(name, dc.material, call_tris)
+        mesh = _build_mesh(name, model, dc, call_tris)
         if mesh is not None:
             meshes.append(mesh)
 
     return meshes
 
 
-def _build_mesh(name: str, material: int, tris: list[Triangle]) -> ImportedMesh | None:
+def _build_mesh(name: str, model: Model, dc: DrawCall, tris: list[Triangle]) -> ImportedMesh | None:
     def any_tri(ts: list[Triangle], f: Callable[[Vertex], bool]) -> bool:
         return any(f(v) for tri in ts for v in tri)
 
@@ -166,8 +174,15 @@ def _build_mesh(name: str, material: int, tris: list[Triangle]) -> ImportedMesh 
     has_nrm = any_tri(tris, lambda v: v.normal is not None)
     has_col = any_tri(tris, lambda v: v.color is not None)
 
-    mesh = ImportedMesh(name, material=material, has_uv=has_uv,
-                        has_normals=has_nrm, has_colors=has_col)
+    shape = model.shapes.shapes[dc.shape] if dc.shape >= 0 else None
+    shape_flags = shape.flag if shape else 0
+    bind_pos = dc.bind_pos.flatten().tolist() if dc.bind_pos is not None else None
+    bind_dir = dc.bind_dir.flatten().tolist() if dc.bind_dir is not None else None
+
+    mesh = ImportedMesh(name, material=dc.material, has_uv=has_uv,
+                        has_normals=has_nrm, has_colors=has_col,
+                        shape_index=dc.shape, shape_flags=shape_flags,
+                        bind_pos=bind_pos, bind_dir=bind_dir)
 
     index_of: dict[tuple, int] = {}
     for tri in tris:

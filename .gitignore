@@ -4,3 +4,7 @@ __pycache__/
 .vscode/
 .DS_Store
 .venv/
+
+/data/g3dcvtr/
+/data/imd/
+/tools/
