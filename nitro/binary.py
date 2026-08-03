@@ -258,3 +258,10 @@ def extract_bgr555(bgr: int) -> tuple[int, int, int]:
 def bgr555_to_float(bgr: int) -> tuple[float, float, float]:
     (r, g, b) = extract_bgr555(bgr)
     return (r / 255.0, g / 255.0, b / 255.0)
+
+
+def float_to_bgr555(r: float, g: float, b: float) -> int:
+    r5 = _clamp(int(round(r * 31.0)), 0, 31)
+    g5 = _clamp(int(round(g * 31.0)), 0, 31)
+    b5 = _clamp(int(round(b * 31.0)), 0, 31)
+    return (b5 << 10) | (g5 << 5) | r5

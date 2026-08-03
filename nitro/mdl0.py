@@ -1,6 +1,6 @@
 
 from __future__ import annotations
-from .binary import BinaryReader, BinaryWriter, FX16_SCALE
+from .binary import BinaryReader, BinaryWriter, FX16_SCALE, float_to_bgr555
 from .dictionary import read_dictionary, write_dictionary, make_dictionary
 from enum import IntEnum
 
@@ -21,6 +21,7 @@ class SrtFlag(IntEnum):
 
 
 class MatFlag(IntEnum):
+    NONE = 0
     TEXMTX_USE = 1 << 0
     TEXMTX_SCALE_ONE = 1 << 1
     TEXMTX_ROTATION_ZERO = 1 << 2
@@ -70,6 +71,14 @@ class MDL0:
         w.seek(base + 8)
         write_dictionary(w, self.dict, lambda wr, v: wr.write_u32(v))
         w.seek(end)
+
+    @classmethod
+    def build(cls, models: dict[str, Model]) -> MDL0:
+        m = cls.__new__(cls)
+        m.dict = make_dictionary({n: 0 for n in models.keys()}, 4)
+        m.models = list(models.values())
+        m.section_size = 0
+        return m
 
     def __iter__(self) -> zip[tuple[str, Model]]:
         return zip(self.dict.keys(), self.models)
@@ -121,6 +130,22 @@ class Model:
 
         w.patch_u32(base, w.tell() - base)  # Size
 
+    @classmethod
+    def build(cls, info: ModelInfo,
+              nodes: NodeSet,
+              sbc: bytes,
+              materials: MaterialSet,
+              shapes: ShapeSet,
+              evp_matrices: EvpMatrices | None = None) -> Model:
+        model = cls.__new__(cls)
+        model.info = info
+        model.nodes = nodes
+        model.sbc = sbc
+        model.materials = materials
+        model.shapes = shapes
+        model.evp_matrices = evp_matrices
+        return model
+
 
 class ModelInfo:
     def __init__(self, r: BinaryReader):
@@ -170,6 +195,108 @@ class ModelInfo:
         w.write_fx16(self.box_d)
         w.write_fx32(self.box_pos_scale)
         w.write_fx32(self.box_inv_pos_scale)
+
+    @classmethod
+    def builder(cls) -> _ModelInfoBuilder:
+        return _ModelInfoBuilder()
+
+
+class _ModelInfoBuilder:
+    def __init__(self):
+        self._node_count = 0
+        self._mat_count = 0
+        self._shape_count = 0
+        self._first_unused_mtx_stack_id = 0
+        self._pos_scale = 1.0
+        self._inv_pos_scale = 1.0
+        self._vertex_count = 0
+        self._polygon_count = 0
+        self._triangle_count = 0
+        self._quad_count = 0
+        self._box_x = 0.0
+        self._box_y = 0.0
+        self._box_z = 0.0
+        self._box_w = 1.0
+        self._box_h = 1.0
+        self._box_d = 1.0
+        self._box_pos_scale = 1.0
+        self._box_inv_pos_scale = 1.0
+
+    def node_count(self, count: int) -> _ModelInfoBuilder:
+        self._node_count = count
+        return self
+
+    def mat_count(self, count: int) -> _ModelInfoBuilder:
+        self._mat_count = count
+        return self
+
+    def shape_count(self, count: int) -> _ModelInfoBuilder:
+        self._shape_count = count
+        return self
+
+    def first_unused_mtx_stack_id(self, idx: int) -> _ModelInfoBuilder:
+        self._first_unused_mtx_stack_id = idx
+        return self
+
+    def pos_scale(self, scale: float) -> _ModelInfoBuilder:
+        self._pos_scale = scale
+        self._inv_pos_scale = 1.0 / scale
+        return self
+
+    def vertex_count(self, count: int) -> _ModelInfoBuilder:
+        self._vertex_count = count
+        return self
+
+    def polygon_count(self, count: int) -> _ModelInfoBuilder:
+        self._polygon_count = count
+        return self
+
+    def triangle_count(self, count: int) -> _ModelInfoBuilder:
+        self._triangle_count = count
+        return self
+
+    def quad_count(self, count: int) -> _ModelInfoBuilder:
+        self._quad_count = count
+        return self
+
+    def bounding_box(self, x: float, y: float, z: float, w: float, h: float, d: float) -> _ModelInfoBuilder:
+        self._box_x = x
+        self._box_y = y
+        self._box_z = z
+        self._box_w = w
+        self._box_h = h
+        self._box_d = d
+        return self
+
+    def box_pos_scale(self, scale: float) -> _ModelInfoBuilder:
+        self._box_pos_scale = scale
+        self._box_inv_pos_scale = 1.0 / scale
+        return self
+
+    def build(self) -> ModelInfo:
+        info = ModelInfo.__new__(ModelInfo)
+        info.sbc_type = 0  # NNS_G3D_SBCTYPE_NORMAL
+        info.scaling_rule = 0  # NNS_G3D_SCALINGRULE_STANDARD TODO: Maybe make this a parameter
+        info.tex_mtx_mode = 0  # NNS_G3D_TEXMTXMODE_MAYA
+        info.node_count = self._node_count
+        info.mat_count = self._mat_count
+        info.shape_count = self._shape_count
+        info.first_unused_mtx_stack_id = self._first_unused_mtx_stack_id
+        info.pos_scale = self._pos_scale
+        info.inv_pos_scale = self._inv_pos_scale
+        info.vertex_count = self._vertex_count
+        info.polygon_count = self._polygon_count
+        info.triangle_count = self._triangle_count
+        info.quad_count = self._quad_count
+        info.box_x = self._box_x
+        info.box_y = self._box_y
+        info.box_z = self._box_z
+        info.box_w = self._box_w
+        info.box_h = self._box_h
+        info.box_d = self._box_d
+        info.box_pos_scale = self._box_pos_scale
+        info.box_inv_pos_scale = self._box_inv_pos_scale
+        return info
 
 
 class NodeData:
@@ -243,6 +370,10 @@ class NodeData:
             w.write_fx32(self.inv_sy)
             w.write_fx32(self.inv_sz)
 
+    @classmethod
+    def builder(cls) -> _NodeDataBuilder:
+        return _NodeDataBuilder()
+
     def hasflag(self, flag: SrtFlag) -> bool:
         return _hasflag(self.flag, flag)
 
@@ -259,6 +390,59 @@ class NodeData:
             self._10, self._11, self._12,
             self._20, self._21, self._22
         ]
+
+
+class _NodeDataBuilder:
+    def __init__(self):
+        self._flag = SrtFlag.SCALE_ONE | SrtFlag.ROTATION_ZERO | SrtFlag.TRANSLATION_ZERO
+        self.t = (0.0, 0.0, 0.0)
+        self.rot = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
+        self.a = self.b = 0.0
+        self.s = (1.0, 1.0, 1.0)
+
+    def translate(self, translation: tuple[float, float, float]) -> _NodeDataBuilder:
+        self.t = translation
+        if translation != (0.0, 0.0, 0.0):
+            self._flag &= ~SrtFlag.TRANSLATION_ZERO
+        return self
+
+    def rotate(self, rot3x3: list[float]) -> _NodeDataBuilder:
+        self.rot = rot3x3
+        self._flag &= ~(SrtFlag.ROTATION_ZERO | SrtFlag.HAS_PIVOT)
+        return self
+
+    def pivot(self, idx: int, a: float, b: float) -> _NodeDataBuilder:
+        self.a = a
+        self.b = b
+        self._flag = (self._flag & 0xFF0F) | ((idx & 0xF) << 4)
+        self._flag |= SrtFlag.HAS_PIVOT
+        self._flag &= ~SrtFlag.ROTATION_ZERO
+        return self
+
+    def scale(self, scale: tuple[float, float, float]) -> _NodeDataBuilder:
+        self.s = scale
+        if scale != (1.0, 1.0, 1.0):
+            self._flag &= ~SrtFlag.SCALE_ONE
+        return self
+
+    def build(self) -> NodeData:
+        n = NodeData.__new__(NodeData)
+        n.flag = int(self._flag)
+        n._00 = int(self.rot[0] * FX16_SCALE)
+        n.tx, n.ty, n.tz = self.t
+        n.sx, n.sy, n.sz = self.s
+        n.inv_sx, n.inv_sy, n.inv_sz = 1 / n.sx, 1 / n.sy, 1 / n.sz
+        n._01 = self.rot[1]
+        n._02 = self.rot[2]
+        n._10 = self.rot[3]
+        n._11 = self.rot[4]
+        n._12 = self.rot[5]
+        n._20 = self.rot[6]
+        n._21 = self.rot[7]
+        n._22 = self.rot[8]
+        n.a = self.a
+        n.b = self.b
+        return n
 
 
 class NodeSet:
@@ -282,6 +466,13 @@ class NodeSet:
         w.seek(base)
         write_dictionary(w, self.dict, lambda wr, v: wr.write_u32(v))
         w.seek(end)
+
+    @classmethod
+    def build(cls, nodes: dict[str, NodeData]) -> NodeSet:
+        ns = cls.__new__(cls)
+        ns.nodes = list(nodes.values())
+        ns.dict = make_dictionary({nn: 0 for nn in nodes.keys()}, 4)
+        return ns
 
     def __len__(self) -> int:
         return len(self.nodes)
@@ -347,6 +538,10 @@ class Material:
         if self.hasflag(MatFlag.EFFECTMTX):
             w.write_fx32s(self.effect_mtx)
 
+    @classmethod
+    def builder(cls) -> _MatBuilder:
+        return _MatBuilder()
+
     def hasflag(self, flag: MatFlag) -> bool:
         return _hasflag(self.flag, flag)
 
@@ -369,6 +564,146 @@ class Material:
     @property
     def alpha(self) -> int:
         return (self.poly_attr >> 16) & 0x1F
+
+
+class _MatBuilder:
+    def __init__(self):
+        self._tag = 0
+        self._diff = (0.0, 0.0, 0.0)
+        self._amb = (0.0, 0.0, 0.0)
+        self._spec = (0.0, 0.0, 0.0)
+        self._emi = (0.0, 0.0, 0.0)
+        self._poly_attr = 0
+        self._poly_attr_mask = 0
+        self._tex_image_param = 0
+        self._tex_image_param_mask = 0
+        self._tex_pltt_base = 0
+        self._flag = MatFlag.TEXMTX_SCALE_ONE | MatFlag.TEXMTX_ROTATION_ZERO | MatFlag.TEXMTX_TRANSLATION_ZERO
+        self._orig_width = 0
+        self._orig_height = 0
+        self._mag_w = 1.0
+        self._mag_h = 1.0
+        self._scale_s = 1.0
+        self._scale_t = 1.0
+        self._rot_sin = 0.0
+        self._rot_cos = 1.0
+        self._trans_s = 0.0
+        self._trans_t = 0.0
+        self._effect_mtx: list[float] | None = None
+
+    def tag(self, tag: int) -> _MatBuilder:
+        self._tag = tag
+        return self
+
+    def diffuse(self, diffuse: tuple[float, float, float]) -> _MatBuilder:
+        self._diff = diffuse
+        return self
+
+    def ambient(self, ambient: tuple[float, float, float]) -> _MatBuilder:
+        self._amb = ambient
+        return self
+
+    def specular(self, specular: tuple[float, float, float]) -> _MatBuilder:
+        self._spec = specular
+        return self
+
+    def emissive(self, emissive: tuple[float, float, float]) -> _MatBuilder:
+        self._emi = emissive
+        return self
+
+    def poly_attr(self, attr: int, mask: int) -> _MatBuilder:
+        self._poly_attr = attr
+        self._poly_attr_mask = mask
+        return self
+
+    def tex_image_param(self, param: int, mask: int) -> _MatBuilder:
+        self._tex_image_param = param
+        self._tex_image_param_mask = mask
+        return self
+
+    def tex_pltt_base(self, base: int) -> _MatBuilder:
+        self._tex_pltt_base = base
+        return self
+
+    def orig_size(self, width: int, height: int) -> _MatBuilder:
+        self._orig_width = width
+        self._orig_height = height
+        return self
+
+    def mag_size(self, width: float, height: float) -> _MatBuilder:
+        self._mag_w = width
+        self._mag_h = height
+        return self
+
+    def tex_scale(self, scale_s: float, scale_t: float) -> _MatBuilder:
+        self._scale_s = scale_s
+        self._scale_t = scale_t
+        if scale_s != 1.0 or scale_t != 1.0:
+            self._flag &= ~MatFlag.TEXMTX_SCALE_ONE
+        return self
+
+    def tex_rotation(self, sin: float, cos: float) -> _MatBuilder:
+        self._rot_sin = sin
+        self._rot_cos = cos
+        if sin != 0.0 or cos != 1.0:
+            self._flag &= ~MatFlag.TEXMTX_ROTATION_ZERO
+        return self
+
+    def tex_translation(self, trans_s: float, trans_t: float) -> _MatBuilder:
+        self._trans_s = trans_s
+        self._trans_t = trans_t
+        if trans_s != 0.0 or trans_t != 0.0:
+            self._flag &= ~MatFlag.TEXMTX_TRANSLATION_ZERO
+        return self
+
+    def effect_matrix(self, mtx: list[float] | None) -> _MatBuilder:
+        self._effect_mtx = mtx
+        if mtx is not None:
+            self._flag |= MatFlag.EFFECTMTX
+        return self
+
+    def build(self) -> Material:
+        mat = Material.__new__(Material)
+        mat.tag = self._tag
+        mat.diff_amb = (
+            (float_to_bgr555(*self._amb) << 16)
+            | float_to_bgr555(*self._diff)
+        )
+        mat.spec_emi = (
+            (float_to_bgr555(*self._emi) << 16)
+            | float_to_bgr555(*self._spec)
+        )
+        mat.poly_attr = self._poly_attr
+        mat.poly_attr_mask = self._poly_attr_mask
+        mat.tex_image_param = self._tex_image_param
+        mat.tex_image_param_mask = self._tex_image_param_mask
+        mat.tex_pltt_base = self._tex_pltt_base
+        mat.flag = int(self._flag)
+        mat.orig_width = self._orig_width
+        mat.orig_height = self._orig_height
+        mat.mag_w = self._mag_w
+        mat.mag_h = self._mag_h
+        mat.scale_s = self._scale_s
+        mat.scale_t = self._scale_t
+        mat.rot_sin = self._rot_sin
+        mat.rot_cos = self._rot_cos
+        mat.trans_s = self._trans_s
+        mat.trans_t = self._trans_t
+        mat.effect_mtx = self._effect_mtx
+
+        size = 44
+        if not mat.hasflag(MatFlag.TEXMTX_SCALE_ONE):
+            size += 8
+        if not mat.hasflag(MatFlag.TEXMTX_ROTATION_ZERO):
+            size += 4
+        if not mat.hasflag(MatFlag.TEXMTX_TRANSLATION_ZERO):
+            size += 8
+        if mat.hasflag(MatFlag.EFFECTMTX):
+            size += 64
+
+        mat.size = size
+
+        return mat
 
 
 class MaterialSet:
@@ -453,9 +788,24 @@ class MaterialSet:
         return len(self.materials)
 
     @classmethod
-    def build(cls, materials: dict[str, Material]) -> MaterialSet:
+    def build(cls, names: list[str], materials: list[Material],
+              tex_names: list[str | None] | None = None,
+              pltt_names: list[str | None] | None = None) -> MaterialSet:
         ms = cls.__new__(cls)
-        ms.materials = list(materials.values())
+        ms.materials = list(materials)
+        ms.dict = make_dictionary({n: 0 for n in names}, 4)
+
+        def invert(assoc: list[str | None] | None):
+            groups: dict[str, list[int]] = {}
+            for i, n in enumerate(assoc or []):
+                if n is not None:
+                    groups.setdefault(n, []).append(i)
+            keys = sorted(groups)  # tex/pltt dicts are name-sorted
+            return make_dictionary({k: TexToMatData.build(groups[k]) for k in keys}, 4)
+
+        ms.dict_tex_to_mat = invert(tex_names)
+        ms.dict_pltt_to_mat = invert(pltt_names)
+        return ms
 
 
 class TexToMatData:
@@ -469,11 +819,11 @@ class TexToMatData:
 
     def write(self, w: BinaryWriter):
         w.write_u16(self.offset)
-        w.write_u8(self.mat_count)
+        w.write_u8(len(self.materials))
         w.write_u8(self.flags)
 
     @classmethod
-    def build(cls, materials: list[int], flags: int) -> TexToMatData:
+    def build(cls, materials: list[int], flags: int = 0) -> TexToMatData:
         v = cls.__new__(cls)
         v.offset = 0
         v.mat_count = len(materials)
@@ -509,6 +859,8 @@ class Shape:
         s.size = 16
         s.flag = flag
         s.dl = dl
+        s.dl_offset = 0
+        s.dl_size = len(dl)
         return s
 
 

@@ -300,6 +300,7 @@ class TestTexToMatData:
     def test_write_reads_back_identically(self):
         raw = struct.pack("<HBB", 40, 5, 0x80)
         original = TexToMatData(BinaryReader(raw))
+        original.materials = [0] * original.mat_count
 
         w = BinaryWriter()
         original.write(w)
