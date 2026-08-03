@@ -1,7 +1,7 @@
 
 from __future__ import annotations
 from .binary import BinaryReader, BinaryWriter, FX16_SCALE
-from .dictionary import read_dictionary, write_dictionary
+from .dictionary import read_dictionary, write_dictionary, make_dictionary
 from enum import IntEnum
 
 
@@ -452,6 +452,11 @@ class MaterialSet:
     def __len__(self) -> int:
         return len(self.materials)
 
+    @classmethod
+    def build(cls, materials: dict[str, Material]) -> MaterialSet:
+        ms = cls.__new__(cls)
+        ms.materials = list(materials.values())
+
 
 class TexToMatData:
     """Maps a texture (or palette) name to the material indices that use it"""
@@ -466,6 +471,15 @@ class TexToMatData:
         w.write_u16(self.offset)
         w.write_u8(self.mat_count)
         w.write_u8(self.flags)
+
+    @classmethod
+    def build(cls, materials: list[int], flags: int) -> TexToMatData:
+        v = cls.__new__(cls)
+        v.offset = 0
+        v.mat_count = len(materials)
+        v.flags = flags
+        v.materials = materials
+        return v
 
 
 class Shape:
@@ -487,6 +501,15 @@ class Shape:
         w.write_u32(self.flag)
         w.write_u32(self.dl_offset)
         w.write_u32(self.dl_size)
+
+    @classmethod
+    def build(cls, tag: int, flag: int, dl: bytes) -> Shape:
+        s = cls.__new__(cls)
+        s.tag = tag
+        s.size = 16
+        s.flag = flag
+        s.dl = dl
+        return s
 
 
 class ShapeSet:
@@ -525,6 +548,13 @@ class ShapeSet:
     def __len__(self) -> int:
         return len(self.shapes)
 
+    @classmethod
+    def build(cls, shapes: dict[str, Shape]) -> ShapeSet:
+        s = cls.__new__(cls)
+        s.shapes = list(shapes.values())
+        s.dict = make_dictionary({n: 0 for n in shapes.keys()}, 4)
+        return s
+
 
 class Envelope:
     def __init__(self, r: BinaryReader):
@@ -534,6 +564,13 @@ class Envelope:
     def write(self, w: BinaryWriter):
         w.write_fx32s(self.inv_m)
         w.write_fx32s(self.inv_n)
+
+    @classmethod
+    def build(cls, inv_m: list[float], inv_n: list[float]) -> Envelope:
+        env = cls.__new__(cls)
+        env.inv_m = inv_m
+        env.inv_n = inv_n
+        return env
 
 
 class EvpMatrices:
@@ -546,3 +583,9 @@ class EvpMatrices:
 
     def __len__(self) -> int:
         return len(self.m)
+
+    @classmethod
+    def build(cls, envelopes: list[Envelope]) -> EvpMatrices:
+        evp = cls.__new__(cls)
+        evp.m = envelopes
+        return evp

@@ -61,6 +61,10 @@ def write_dictionary(w: BinaryWriter, dict: Dictionary[T], write_data: Callable[
     w.patch_u16(pos_size, w.tell() - start)
 
 
+def make_dictionary(d: dict[str, T], data_size: int) -> Dictionary[T]:
+    return Dictionary(0, list(d.keys()), list(d.values()), data_size)
+
+
 class Dictionary(Generic[T]):
     """
     An NSBMD Dictionary
