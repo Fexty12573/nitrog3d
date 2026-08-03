@@ -2,6 +2,7 @@
 from __future__ import annotations
 from .binary import BinaryReader, BinaryWriter, FX16_SCALE, float_to_bgr555
 from .dictionary import read_dictionary, write_dictionary, make_dictionary
+from .tex0 import TexImageParam, TexFmt
 from enum import IntEnum
 
 
@@ -486,7 +487,7 @@ class Material:
         self.spec_emi = r.read_u32()
         self.poly_attr = r.read_u32()
         self.poly_attr_mask = r.read_u32()
-        self.tex_image_param = r.read_u32()
+        self.tex_image_param = TexImageParam(r.read_u32())
         self.tex_image_param_mask = r.read_u32()
         self.tex_pltt_base = r.read_u16()
         self.flag = r.read_u16()
@@ -518,7 +519,7 @@ class Material:
         w.write_u32(self.spec_emi)
         w.write_u32(self.poly_attr)
         w.write_u32(self.poly_attr_mask)
-        w.write_u32(self.tex_image_param)
+        w.write_u32(self.tex_image_param.v)
         w.write_u32(self.tex_image_param_mask)
         w.write_u16(self.tex_pltt_base)
         w.write_u16(self.flag)
@@ -547,15 +548,15 @@ class Material:
 
     @property
     def tex_width(self) -> int:
-        return 8 << ((self.tex_image_param >> 20) & 0x7)
+        return self.tex_image_param.width
 
     @property
     def tex_height(self) -> int:
-        return 8 << ((self.tex_image_param >> 23) & 0x7)
+        return self.tex_image_param.height
 
     @property
-    def tex_format(self) -> int:
-        return (self.tex_image_param >> 26) & 0x7
+    def tex_format(self) -> TexFmt:
+        return self.tex_image_param.format
 
     @property
     def cull_mode(self) -> int:
@@ -616,7 +617,7 @@ class _MatBuilder:
         self._poly_attr_mask = mask
         return self
 
-    def tex_image_param(self, param: int, mask: int) -> _MatBuilder:
+    def tex_image_param(self, param: TexImageParam, mask: int) -> _MatBuilder:
         self._tex_image_param = param
         self._tex_image_param_mask = mask
         return self

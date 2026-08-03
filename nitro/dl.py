@@ -2,6 +2,7 @@
 from __future__ import annotations
 from .binary import *
 from . import matrix as mat
+from .tex0 import TexImageParam, TexGen
 import numpy as np
 from enum import IntEnum
 from dataclasses import dataclass
@@ -14,13 +15,6 @@ class MtxMode(IntEnum):
     POSITION = 1
     POSITION_VECTOR = 2
     TEXTURE = 3
-
-
-class TexGen(IntEnum):
-    NONE = 0
-    TEXCOORD = 1
-    NORMAL = 2
-    VERTEX = 3
 
 
 class PrimType(IntEnum):
@@ -287,10 +281,12 @@ class GeometryBuilder:
                  tm[2, 1] + tm[3, 1]) / self.tex_height
             self.cur_uv = (u, v)
 
-    def tex_image_param(self, cmd: int):
-        self.tex_width = 8 << ((cmd >> 20) & 7)
-        self.tex_height = 8 << ((cmd >> 23) & 7)
-        self.tex_gen = TexGen((cmd >> 30) & 3)
+    def tex_image_param(self, cmd: TexImageParam | int):
+        if isinstance(cmd, int):
+            cmd = TexImageParam(cmd)
+        self.tex_width = cmd.width
+        self.tex_height = cmd.height
+        self.tex_gen = cmd.texgen
 
     def begin(self, prim_type: PrimType | int):
         self._flush_primitives()

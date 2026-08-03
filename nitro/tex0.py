@@ -1,6 +1,7 @@
 
+from __future__ import annotations
 from .binary import BinaryReader, BinaryWriter
-from .dictionary import read_dictionary, write_dictionary
+from .dictionary import read_dictionary, write_dictionary, make_dictionary
 from enum import IntEnum
 
 
@@ -16,6 +17,97 @@ class TexFmt(IntEnum):
 
     def has_alpha(self) -> bool:
         return self in (self.A3I5, self.A5I3, self.COMP4X4, self.DIRECT)
+
+
+class TexGen(IntEnum):
+    NONE = 0
+    TEXCOORD = 1
+    NORMAL = 2
+    VERTEX = 3
+
+
+class TexRepeat(IntEnum):
+    NONE = 0
+    S = 1
+    T = 2
+    ST = 3
+
+
+class TexFlip(IntEnum):
+    NONE = 0
+    S = 1
+    T = 2
+    ST = 3
+
+
+class TexColor0Mode(IntEnum):
+    NORMAL = 0
+    TRANSPARENT = 1
+
+
+class TexImageParam:
+    def __init__(self, value: int):
+        self.v = value & 0xFFFFFFFF
+
+    def __eq__(self, value):
+        if isinstance(value, TexImageParam):
+            return self.v == value.v
+        elif isinstance(value, int):
+            return self.v == value
+        return False
+
+    @property
+    def texgen(self) -> TexGen:
+        return TexGen((self.v >> 30) & 0x3)
+
+    @property
+    def color0_mode(self) -> TexColor0Mode:
+        return TexColor0Mode(((self.v >> 29) & 1))
+
+    @property
+    def format(self) -> TexFmt:
+        return TexFmt((self.v >> 26) & 0x7)
+
+    @property
+    def width(self) -> int:
+        return 8 << ((self.v >> 20) & 0x7)
+
+    @property
+    def height(self) -> int:
+        return 8 << ((self.v >> 23) & 0x7)
+
+    @property
+    def flip(self) -> TexFlip:
+        return TexFlip((self.v >> 18) & 0x3)
+
+    @property
+    def repeat(self) -> TexRepeat:
+        return TexRepeat((self.v >> 16) & 0x3)
+
+    @property
+    def addr(self) -> int:
+        return self.v & 0xFFFF
+
+    @classmethod
+    def build(cls,
+              texgen: TexGen,
+              color0_mode: TexColor0Mode,
+              fmt: TexFmt,
+              width: int,
+              height: int,
+              flip: TexFlip,
+              repeat: TexRepeat,
+              addr: int) -> TexImageParam:
+        w = 0
+        w |= (texgen & 0x3) << 30
+        w |= (color0_mode & 0x1) << 29
+        w |= (fmt & 0x7) << 26
+        w |= ((width.bit_length() - 4) & 0x7) << 20
+        w |= ((height.bit_length() - 4) & 0x7) << 23
+        w |= (flip & 0x3) << 18
+        w |= (repeat & 0x3) << 16
+        w |= addr & 0xFFFF
+        return cls(w)
 
 
 _DATA_BITS = [
@@ -160,6 +252,22 @@ class TEX0:
 
         w.patch_u32(pos_size, w.tell() - base)
 
+    @classmethod
+    def build(cls,
+              tex_info: TexInfo,
+              tex4x4_info: Tex4x4Info,
+              pltt_info: PlttInfo,
+              textures: dict[str, TexDictData],
+              palettes: dict[str, PlttDictData]) -> TEX0:
+        t = cls.__new__(cls)
+        t.section_size = 0
+        t.tex_info = tex_info
+        t.tex4x4_info = tex4x4_info
+        t.pltt_info = pltt_info
+        t.tex_dict = make_dictionary(textures, TexDictData.SIZE)
+        t.pltt_dict = make_dictionary(palettes, PlttDictData.SIZE)
+        return t
+
 
 class TexInfo:
     def __init__(self, r: BinaryReader):
@@ -178,6 +286,16 @@ class TexInfo:
         w.write_u16(0)
         w.write_u32(self.tex_offset)
 
+    @classmethod
+    def build(cls, vram_key: int, flags: int) -> TexInfo:
+        t = cls.__new__(cls)
+        t.vram_key = vram_key
+        t.flags = flags
+        t.tex_size = 0
+        t.dict_offset = 0
+        t.tex_offset = 0
+        return t
+
 
 class Tex4x4Info(TexInfo):
     def __init__(self, r: BinaryReader):
@@ -187,6 +305,17 @@ class Tex4x4Info(TexInfo):
     def write(self, w: BinaryWriter):
         super().write(w)
         w.write_u32(self.tex_pltt_idx_offset)
+
+    @classmethod
+    def build(cls, vram_key: int, flags: int) -> Tex4x4Info:
+        t = cls.__new__(cls)
+        t.vram_key = vram_key
+        t.flags = flags
+        t.tex_size = 0
+        t.dict_offset = 0
+        t.tex_offset = 0
+        t.tex_pltt_idx_offset = 0
+        return t
 
 
 class PlttInfo:
@@ -212,15 +341,23 @@ class PlttInfo:
         w.write_u16(0)
         w.write_u32(self.pltt_offset)
 
+    @classmethod
+    def build(cls, vram_key: int, flags: int) -> PlttInfo:
+        p = cls.__new__(cls)
+        p.vram_key = vram_key
+        p.flags = flags
+        p.pltt_size = 0
+        p.dict_offset = 0
+        p.pltt_offset = 0
+        return p
+
 
 class TexDictData:
+    SIZE = 8
+
     def __init__(self, r: BinaryReader):
-        self.offset = r.read_u16() << 3
-        self.tex_image_param = r.read_u16()
-        self.s = 8 << ((self.tex_image_param >> 4) & 0x7)
-        self.t = 8 << ((self.tex_image_param >> 7) & 0x7)
-        self.fmt = TexFmt((self.tex_image_param >> 10) & 0x7)
-        self.transparent_color = ((self.tex_image_param >> 13) & 1) == 1
+        self.tex_image_param = TexImageParam(r.read_u32())
+        self.offset = self.tex_image_param.addr << 3
         self.extra_param = r.read_u32()
         self.data = b""
         self.data4x4 = b""
@@ -239,12 +376,40 @@ class TexDictData:
         r.seek(pos)
 
     def write(self, w: BinaryWriter):
-        w.write_u16((self.offset >> 3) & 0xFFFF)
-        w.write_u16(self.tex_image_param)
+        w.write_u32((self.tex_image_param.v & 0xFFFF0000)
+                    | ((self.offset >> 3) & 0x0000FFFF))
         w.write_u32(self.extra_param)
+
+    @classmethod
+    def build(cls, param: TexImageParam, extra_param: int, data: bytes, data4x4: bytes = b"") -> TexDictData:
+        d = cls.__new__(cls)
+        d.offset = 0
+        d.tex_image_param = param
+        d.extra_param = extra_param
+        d.data = data
+        d.data4x4 = data4x4
+        return d
+
+    @property
+    def s(self) -> int:
+        return self.tex_image_param.width
+
+    @property
+    def t(self) -> int:
+        return self.tex_image_param.height
+
+    @property
+    def fmt(self) -> TexFmt:
+        return self.tex_image_param.format
+
+    @property
+    def transparent_color(self) -> bool:
+        return self.tex_image_param.color0_mode == TexColor0Mode.TRANSPARENT
 
 
 class PlttDictData:
+    SIZE = 4
+
     def __init__(self, r: BinaryReader):
         self.offset = r.read_u16() << 3
         self.flag = r.read_u16()
@@ -259,3 +424,11 @@ class PlttDictData:
     def write(self, w: BinaryWriter):
         w.write_u16((self.offset >> 3) & 0xFFFF)
         w.write_u16(self.flag)
+
+    @classmethod
+    def build(cls, data: bytes, flag: int = 0) -> PlttDictData:
+        d = cls.__new__(cls)
+        d.offset = 0
+        d.flag = flag
+        d.data = data
+        return d
