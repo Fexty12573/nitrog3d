@@ -32,6 +32,7 @@ class SbcOpt(IntFlag):
     NONE = 0x00
     STORE = 0x20
     RESTORE = 0x40
+    INVERSE = 0x20
 
 
 _RATIO_SCALE = 1.0 / 256.0
