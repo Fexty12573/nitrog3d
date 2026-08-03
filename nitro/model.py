@@ -42,6 +42,7 @@ class ImportedMesh:
     has_colors: bool = False
     shape_index: int = -1
     shape_flags: int = 0
+    visible: bool = True
     bind_pos: list[float] = field(default_factory=list)
     bind_dir: list[float] = field(default_factory=list)
 
@@ -182,7 +183,7 @@ def _build_mesh(name: str, model: Model, dc: DrawCall, tris: list[Triangle]) -> 
     mesh = ImportedMesh(name, material=dc.material, has_uv=has_uv,
                         has_normals=has_nrm, has_colors=has_col,
                         shape_index=dc.shape, shape_flags=shape_flags,
-                        bind_pos=bind_pos, bind_dir=bind_dir)
+                        visible=dc.visible, bind_pos=bind_pos, bind_dir=bind_dir)
 
     index_of: dict[tuple, int] = {}
     for tri in tris:
