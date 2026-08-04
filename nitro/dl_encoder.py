@@ -8,19 +8,20 @@ from .sbc_encoder import SbcEncoder
 from .quantize import decide_vertex_form
 from . import matrix as mat
 import struct
+import numpy as np
 
 
 class DlEncoder:
-    def __init__(self, mesh: ImportedMesh, sbc_enc: SbcEncoder):
+    def __init__(self, mesh: ImportedMesh, node_mtx: np.ndarray, pos_scale: float):
         assert len(set(mesh.vertex_bone)
                    ) == 1, "multi matrix shapes not yet supported"
 
         self.mesh = mesh
-        self.sbc = sbc_enc
         self.dl = bin.BinaryWriter()
         self.cmds: list[_Command] = []
 
-        self.inv_pos = mat.inverse(mat.from4x4(self.mesh.bind_pos))
+        S = mat.scale(pos_scale, pos_scale, pos_scale)
+        self.inv_pos = mat.inverse(S @ node_mtx)
         self.inv_dir = mat.inverse(mat.from4x4(self.mesh.bind_dir))
 
         self.prev_normal: int | None = None
