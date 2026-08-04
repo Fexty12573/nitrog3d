@@ -88,7 +88,10 @@ TextureCache = dict[tuple[str, str], DecodedTexture | None]
 
 
 def load(data: bytes | bytearray) -> ImportedModel:
-    nsbmd = NSBMD(data)
+    return load_from(NSBMD(data))
+
+
+def load_from(nsbmd: NSBMD) -> ImportedModel:
     result = ImportedModel()
 
     if nsbmd.model_set is None:

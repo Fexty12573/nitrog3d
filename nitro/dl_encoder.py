@@ -5,6 +5,7 @@ from . import binary as bin
 from .dl import DlCmd, PrimType, NORMAL_SCALE, TEXCOORD_SCALE
 from .model import ImportedMesh
 from .sbc_encoder import SbcEncoder
+from .quantize import decide_vertex_form
 from . import matrix as mat
 import struct
 
@@ -82,28 +83,25 @@ class DlEncoder:
     def _vertex(self, v: tuple[float, float, float]):
         local = mat.mul(v, self.inv_pos)
         vtx = tuple(map(bin.to_fx, local))
-        self._decide_vtx_type(vtx)
+        self._emit_vtx(vtx)
         self.prev_vtx = vtx
 
-    def _decide_vtx_type(self, vtx: tuple[int, int, int]):
-        if self.prev_vtx is not None:
-            if vtx[2] == self.prev_vtx[2]:
-                return self._vertex_xy(vtx)
-            elif vtx[1] == self.prev_vtx[1]:
-                return self._vertex_xz(vtx)
-            elif vtx[0] == self.prev_vtx[0]:
-                return self._vertex_yz(vtx)
-
-        if all((c & 0x3F) == 0 for c in vtx):
-            return self._vertex10(vtx)
-
-        if self.prev_vtx is None:
-            return self._vertex_xyz(vtx)
-
-        if all(-0x200 <= c - p < 0x200 for c, p in zip(vtx, self.prev_vtx)):
-            return self._vertex_diff(vtx)
-
-        self._vertex_xyz(vtx)
+    def _emit_vtx(self, vtx: tuple[int, int, int]):
+        match decide_vertex_form(vtx, self.prev_vtx):
+            case DlCmd.VERTEX:
+                self._vertex_xyz(vtx)
+            case DlCmd.VERTEX_XY:
+                self._vertex_xy(vtx)
+            case DlCmd.VERTEX_XZ:
+                self._vertex_xz(vtx)
+            case DlCmd.VERTEX_YZ:
+                self._vertex_yz(vtx)
+            case DlCmd.VERTEX_10:
+                self._vertex10(vtx)
+            case DlCmd.VERTEX_DIFF:
+                self._vertex_diff(vtx)
+            case _:
+                raise ValueError(f"Unexpected vertex form: {vtx}")
 
     def _vertex_xyz(self, v: tuple[int, int, int]):
         self._emit(DlCmd.VERTEX, "<II", *_encode_vertex3x16(v))
