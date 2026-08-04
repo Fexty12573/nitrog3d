@@ -29,6 +29,8 @@ class DlEncoder:
         self.prev_uv: int | None = None
         self.prev_vtx: tuple[int, int, int] | None = None
 
+        self.total_vertices = 0
+
     def encode(self) -> bytes:
         self._begin(PrimType.TRIANGLES)
 
@@ -86,6 +88,7 @@ class DlEncoder:
         vtx = tuple(map(bin.to_fx, local))
         self._emit_vtx(vtx)
         self.prev_vtx = vtx
+        self.total_vertices += 1
 
     def _emit_vtx(self, vtx: tuple[int, int, int]):
         match decide_vertex_form(vtx, self.prev_vtx):

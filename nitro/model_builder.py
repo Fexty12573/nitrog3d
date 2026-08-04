@@ -27,6 +27,7 @@ class ModelBuilder:
         self.id_map: dict[int, int] = {}
         self.sbc = bytes()
         self.first_unused_mtx_stack_id = 0
+        self.total_vertices = 0
 
     def build(self) -> mdl0.Model:
         self._plan_nodes()
@@ -57,8 +58,7 @@ class ModelBuilder:
 
     def _plan_shapes(self):
         # TODO: We do one shape per mesh, grouped by bound node.
-        # Grouping is a temporary solution until encoding
-        # multi-mtx DLs is supported.
+        # Grouping is a temporary solution until encoding multi-mtx DLs is supported.
         by_node: dict[int, list[ImportedMesh]] = {}
         for mesh in self.sub.meshes:
             bound = set(mesh.vertex_bone)
@@ -90,10 +90,12 @@ class ModelBuilder:
     def _encode_dls(self):
         for shape in self.shapes:
             bone = self.sub.bones[shape.mesh.vertex_bone[0]]
-            self.dls.append(DlEncoder(
+            enc = DlEncoder(
                 shape.mesh, bone.world_mtx,
                 bone.world_dir_mtx, self.pos_scale
-            ).encode())
+            )
+            self.dls.append(enc.encode())
+            self.total_vertices += enc.total_vertices
 
     def _encode_sbc(self):
         enc = SbcEncoder(
@@ -149,18 +151,32 @@ class ModelBuilder:
     def _build_shapes(self) -> mdl0.ShapeSet:
         shapes: dict[str, mdl0.Shape] = {}
         for i, (shape, dl) in enumerate(zip(self.shapes, self.dls)):
-            shapes[shape.name] = mdl0.Shape.build(
-                tag=i,
-                flag=0,
-                dl=dl
-            )
+            shapes[shape.name] = mdl0.Shape.build(tag=i, flag=0, dl=dl)
 
         return mdl0.ShapeSet.build(shapes)
 
     def _build_info(self) -> mdl0.ModelInfo:
-        # TODO: Implement this
-        # need to adjust DlEncoder to record number of vertex calls
-        raise NotImplementedError()
+        lo, hi = _world_bounds(self.sub)
+        extent = tuple(h - l for l, h in zip(lo, hi))
+
+        box_scale = float(1 << box_exponent_for(lo, extent))
+        tris = sum(len(p.mesh.faces) for p in self.shapes)
+
+        return (
+            mdl0.ModelInfo.builder()
+                .node_count(len(self.bones))
+                .mat_count(len(self.sub.materials))
+                .shape_count(len(self.shapes))
+                .triangle_count(tris)
+                .vertex_count(self.total_vertices)
+                .first_unused_mtx_stack_id(self.first_unused_mtx_stack_id)
+                .pos_scale(self.pos_scale)
+                .polygon_count(tris)
+                .bounding_box(*(c / box_scale for c in lo),
+                              *(e / box_scale for e in extent))
+                .box_pos_scale(self.pos_scale)
+                .build()
+        )
 
 
 @dataclass(slots=True)
@@ -220,3 +236,11 @@ def _build_material(mat: ImportedMaterial) -> mdl0.Material:
             .poly_attr(poly_attr, 0x3F1FFFFF)
             .build()
     )
+
+
+def _world_bounds(sub: ImportedSubModel):
+    pts = [v for mesh in sub.meshes for v in mesh.vertices]
+    if not pts:
+        return (0.0, 0.0, 0.0), (0.0, 0.0, 0.0)
+    a = np.array(pts)
+    return tuple(a.min(axis=0).tolist()), tuple(a.max(axis=0).tolist())
