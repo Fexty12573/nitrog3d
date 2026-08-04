@@ -69,6 +69,7 @@ class SbcInterpreter:
         n = len(self.nodes)
         self.node_parent = [-1] * n
         self.node_world = [mat.identity() for _ in range(n)]
+        self.node_world_dir = [mat.identity() for _ in range(n)]
         self.node_seen = [False] * n
         # Nodes are visible by default, only NODE can turn them invisible
         self.node_visible = [True] * n
@@ -253,6 +254,7 @@ class SbcInterpreter:
         self._apply_joint(node_id)
         self.node_parent[node_id] = parent
         self.node_world[node_id] = b.cur_pos
+        self.node_world_dir[node_id] = b.cur_dir
         self.node_seen[node_id] = True
         if store is not None:
             b.store_mtx(store)

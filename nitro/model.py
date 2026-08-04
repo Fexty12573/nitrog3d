@@ -82,6 +82,7 @@ class Bone:
     name: str
     parent: int
     world_mtx: np.ndarray
+    world_dir_mtx: np.ndarray
 
 
 TextureCache = dict[tuple[str, str], DecodedTexture | None]
@@ -144,7 +145,8 @@ def _build_bones(model: Model, interp: SbcInterpreter) -> list[Bone]:
         Bone(
             names[i] if i < len(names) else f"bone{i}",
             interp.node_parent[i],
-            interp.node_world[i]
+            interp.node_world[i],
+            interp.node_world_dir[i]
         ) for i in range(len(model.nodes))
     ]
 

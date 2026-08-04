@@ -12,7 +12,7 @@ import numpy as np
 
 
 class DlEncoder:
-    def __init__(self, mesh: ImportedMesh, node_mtx: np.ndarray, pos_scale: float):
+    def __init__(self, mesh: ImportedMesh, node_mtx: np.ndarray, node_dir: np.ndarray, pos_scale: float):
         assert len(set(mesh.vertex_bone)
                    ) == 1, "multi matrix shapes not yet supported"
 
@@ -22,7 +22,7 @@ class DlEncoder:
 
         S = mat.scale(pos_scale, pos_scale, pos_scale)
         self.inv_pos = mat.inverse(S @ node_mtx)
-        self.inv_dir = mat.inverse(mat.from4x4(self.mesh.bind_dir))
+        self.inv_dir = mat.inverse(node_dir)
 
         self.prev_normal: int | None = None
         self.prev_color: int | None = None
