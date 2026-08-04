@@ -101,10 +101,6 @@ class BinaryReader:
         return self.read_str(n).replace("\x00", "")
 
 
-def _clamp(v: int, lo: int, hi: int) -> int:
-    return min(max(v, lo), hi)
-
-
 class BinaryWriter:
     """Little endian binary writer. Automatically extends in size when needed"""
 
@@ -141,29 +137,33 @@ class BinaryWriter:
         self._write("<B", v & 0xFF)
 
     def write_s8(self, v: int):
-        self._write("<b", _clamp(v, -0x80, 0x7F))
+        self._write("<b", clamp(v, -0x80, 0x7F))
 
     def write_u16(self, v: int):
         self._write("<H", v & 0xFFFF)
 
     def write_s16(self, v: int):
-        self._write("<h", _clamp(v, -0x8000, 0x7FFF))
+        self._write("<h", clamp(v, -0x8000, 0x7FFF))
 
     def write_u32(self, v: int):
         self._write("<I", v & 0xFFFFFFFF)
 
     def write_s32(self, v: int):
-        self._write("<i", _clamp(v, -0x80000000, 0x7FFFFFFF))
+        self._write("<i", clamp(v, -0x80000000, 0x7FFFFFFF))
 
     def write_f32(self, v: float):
         self._write("<f", v)
 
     def write_fx16(self, v: float):
-        self.write_s16(_clamp(int(round(v * FX16_SCALE)), -0x8000, 0x7FFF))
+        self.write_s16(clamp(int(round(v * FX16_SCALE)), -0x8000, 0x7FFF))
 
     def write_fx32(self, v: float):
         self.write_s32(
-            _clamp(int(round(v * FX32_SCALE)), -0x80000000, 0x7FFFFFFF))
+            clamp(int(round(v * FX32_SCALE)), -0x80000000, 0x7FFFFFFF))
+
+    def write_u8s(self, vs: list[int]):
+        for v in vs:
+            self.write_u8(v)
 
     def write_u16s(self, vs: list[int]):
         for v in vs:
@@ -248,6 +248,10 @@ def unpack3x10(v: int) -> tuple[int, int, int]:
     )
 
 
+def pack3x10(x: int, y: int, z: int) -> int:
+    return ((x & 0x3FF) | ((y & 0x3FF) << 10) | ((z & 0x3FF) << 20))
+
+
 def extract_bgr555(bgr: int) -> tuple[int, int, int]:
     b = expand5((bgr >> 10) & 0x1F)
     g = expand5((bgr >> 5) & 0x1F)
@@ -261,7 +265,16 @@ def bgr555_to_float(bgr: int) -> tuple[float, float, float]:
 
 
 def float_to_bgr555(r: float, g: float, b: float) -> int:
-    r5 = _clamp(int(round(r * 31.0)), 0, 31)
-    g5 = _clamp(int(round(g * 31.0)), 0, 31)
-    b5 = _clamp(int(round(b * 31.0)), 0, 31)
+    r5 = clamp(int(round(r * 31.0)), 0, 31)
+    g5 = clamp(int(round(g * 31.0)), 0, 31)
+    b5 = clamp(int(round(b * 31.0)), 0, 31)
     return (b5 << 10) | (g5 << 5) | r5
+
+
+def clamp(v: int, lo: int, hi: int) -> int:
+    return min(max(v, lo), hi)
+
+
+def to_fx(v: float) -> int:
+    x = v * FX32_SCALE
+    return int(x + 0.5) if x >= 0 else int(x - 0.5)

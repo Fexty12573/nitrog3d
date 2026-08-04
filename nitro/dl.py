@@ -24,9 +24,9 @@ class PrimType(IntEnum):
     QUAD_STRIP = 3
 
 
-_NORMAL_SCALE = 1.0 / 512.0
-_VERTEX10_SCALE = 1.0 / 64.0
-_TEXCOORD_SCALE = 1.0 / 16.0
+NORMAL_SCALE = 1.0 / 512.0
+VERTEX10_SCALE = 1.0 / 64.0
+TEXCOORD_SCALE = 1.0 / 16.0
 _MTX_STACK_MASK = 0x1F
 _ALPHA_MASK = 0x1F
 
@@ -256,7 +256,7 @@ class GeometryBuilder:
         self.last_col = bgr555_to_float(rgb)
 
     def normal(self, packed: int):
-        (nx, ny, nz) = tuple(map(lambda x: x * _NORMAL_SCALE, unpack3x10(packed)))
+        (nx, ny, nz) = tuple(map(lambda x: x * NORMAL_SCALE, unpack3x10(packed)))
         n = mat.mul_no_translate((nx, ny, nz), self.cur_dir)
         self.cur_nrm = n
         if self.tex_gen == TexGen.NORMAL:
@@ -268,8 +268,8 @@ class GeometryBuilder:
             self.cur_uv = (u, v)
 
     def texcoord(self, packed: int):
-        s = s16(packed) * _TEXCOORD_SCALE
-        t = s16(packed >> 16) * _TEXCOORD_SCALE
+        s = s16(packed) * TEXCOORD_SCALE
+        t = s16(packed >> 16) * TEXCOORD_SCALE
         self.last_tex = (s, t)
         if self.tex_gen == TexGen.NONE:
             self.cur_uv = (s / self.tex_width, t / self.tex_height)
@@ -308,7 +308,7 @@ class GeometryBuilder:
         self._vertex((x, y, z))
 
     def vertex10(self, v: int):
-        (x, y, z) = tuple(map(lambda x: x * _VERTEX10_SCALE, unpack3x10(v)))
+        (x, y, z) = tuple(map(lambda x: x * VERTEX10_SCALE, unpack3x10(v)))
         self._vertex((x, y, z))
 
     def vertex_xy(self, v: int):
