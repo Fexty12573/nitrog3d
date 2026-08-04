@@ -11,8 +11,8 @@ from collections import Counter, defaultdict
 class SbcEncoder:
     def __init__(self, model: ImportedSubModel):
         self.model = model
-        self.bones = _preorder_bones(model.bones)
-        self.id_map = _remap_bone_ids(self.bones)
+        self.bones = preorder_bones(model.bones)
+        self.id_map = remap_bone_ids(self.bones)
         self.id_map[-1] = 0
         self.nodes: list[Node] = []
         self.sbc = BinaryWriter()
@@ -141,7 +141,7 @@ class SbcEncoder:
         self.sbc.write_u8(int(cmd))
 
 
-def _preorder_bones(bones: list[Bone]) -> list[tuple[int, Bone]]:
+def preorder_bones(bones: list[Bone]) -> list[tuple[int, Bone]]:
     root_id, root = next(
         filter(lambda b: b[1].parent == -1, enumerate(bones)), (0, bones[0])
     )
@@ -155,7 +155,7 @@ def _get_children(id: int, bone: Bone, bones: list[Bone]) -> list[tuple[int, Bon
     return [(id, bone), *children]
 
 
-def _remap_bone_ids(bones: list[tuple[int, Bone]]) -> dict[int, int]:
+def remap_bone_ids(bones: list[tuple[int, Bone]]) -> dict[int, int]:
     return {old_id: new_id for new_id, (old_id, _) in enumerate(bones)}
 
 
