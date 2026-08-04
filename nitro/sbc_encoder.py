@@ -9,10 +9,10 @@ from collections import Counter, defaultdict
 
 
 class SbcEncoder:
-    def __init__(self, model: ImportedSubModel):
+    def __init__(self, model: ImportedSubModel, mapping: BoneMapping):
         self.model = model
-        self.bones = preorder_bones(model.bones)
-        self.id_map = remap_bone_ids(self.bones)
+        self.bones = mapping.bones
+        self.id_map = mapping.id_map
         self.id_map[-1] = 0
         self.nodes: list[Node] = []
         self.sbc = BinaryWriter()
@@ -141,24 +141,6 @@ class SbcEncoder:
         self.sbc.write_u8(int(cmd))
 
 
-def preorder_bones(bones: list[Bone]) -> list[tuple[int, Bone]]:
-    root_id, root = next(
-        filter(lambda b: b[1].parent == -1, enumerate(bones)), (0, bones[0])
-    )
-    return _get_children(root_id, root, bones)
-
-
-def _get_children(id: int, bone: Bone, bones: list[Bone]) -> list[tuple[int, Bone]]:
-    children: list[Bone] = []
-    for (cid, child) in filter(lambda bone: bone[1].parent == id and bone[0] != id, enumerate(bones)):
-        children.extend(_get_children(cid, child, bones))
-    return [(id, bone), *children]
-
-
-def remap_bone_ids(bones: list[tuple[int, Bone]]) -> dict[int, int]:
-    return {old_id: new_id for new_id, (old_id, _) in enumerate(bones)}
-
-
 def _make_sbc_cmd(cmd: SbcCmd, opt: SbcOpt = SbcOpt.NONE) -> int:
     return int(cmd) | int(opt)
 
@@ -169,3 +151,15 @@ class Node:
     parent: int
     world_mtx: np.ndarray
     mtx_slot: int | None = None
+
+
+@dataclass(slots=True)
+class BoneMapping:
+    bones: list[tuple[int, Bone]]
+    id_map: dict[int, int]
+
+    @classmethod
+    def create(cls, bones: list[Bone]):
+        ordered = preorder_bones(bones)
+        id_map = remap_bone_ids(ordered)
+        return BoneMapping(ordered, id_map)
