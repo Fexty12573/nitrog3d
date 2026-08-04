@@ -55,7 +55,7 @@ def _set_argb8888_alpha(argb: int, a8: int) -> int:
 
 
 def _pal_get(pal: list[int], idx: int) -> int:
-    return pal[idx] if idx <= len(pal) else 0
+    return pal[idx] if idx < len(pal) else 0
 
 
 def _decode_pltt4(data: bytes, pal: list[int], first_transparent: bool) -> list[int]:
