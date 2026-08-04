@@ -98,7 +98,8 @@ class ModelBuilder:
     def _encode_sbc(self):
         enc = SbcEncoder(
             self.sub,
-            BoneMapping(self.bones, self.id_map)
+            BoneMapping(self.bones, self.id_map),
+            {s.name: s.index for s in self.shapes}
         )
         self.sbc = enc.encode()
         self.first_unused_mtx_stack_id = enc.next_mtx_stack_id

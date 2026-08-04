@@ -9,11 +9,12 @@ from collections import Counter, defaultdict
 
 
 class SbcEncoder:
-    def __init__(self, model: ImportedSubModel, mapping: BoneMapping):
+    def __init__(self, model: ImportedSubModel, mapping: BoneMapping, shape_map: dict[str, int]):
         self.model = model
         self.bones = mapping.bones
         self.id_map = mapping.id_map
         self.id_map[-1] = 0
+        self.shape_map = shape_map
         self.nodes: list[Node] = []
         self.sbc = BinaryWriter()
         self.next_mtx_stack_id = 0
@@ -66,12 +67,12 @@ class SbcEncoder:
 
             self._emit_posscale()
 
-            for i, mesh in enumerate(meshes):
+            for mesh in meshes:
                 if self.current_bound_mat != mesh.material:
                     self._emit_mat(mesh.material)
                     self.current_bound_mat = mesh.material
 
-                self._emit_shp(i)
+                self._emit_shp(self.shape_map[mesh.name])
 
         self._emit_posscale(True)
         self._emit_ret()
@@ -157,9 +158,3 @@ class Node:
 class BoneMapping:
     bones: list[tuple[int, Bone]]
     id_map: dict[int, int]
-
-    @classmethod
-    def create(cls, bones: list[Bone]):
-        ordered = preorder_bones(bones)
-        id_map = remap_bone_ids(ordered)
-        return BoneMapping(ordered, id_map)
