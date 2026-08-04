@@ -5,8 +5,8 @@ import numpy as np
 from . import texture
 from .binary import bgr555_to_float
 from .nsbmd import NSBMD
-from .mdl0 import Model, MatFlag, Shape
-from .tex0 import TEX0, TexFmt
+from .mdl0 import Model, MatFlag, CullMode
+from .tex0 import TEX0, TexFmt, TexImageParam
 from .dl import GeometryBuilder, Triangle, Vertex
 from .sbc import SbcInterpreter, DrawCall
 
@@ -51,9 +51,13 @@ class ImportedMesh:
 class ImportedMaterial:
     name: str
     texture: DecodedTexture | None = None
+    tex_img_param: TexImageParam | None = None
     diffuse: tuple[float, float, float] = (1.0, 1.0, 1.0)
+    ambient: tuple[float, float, float] = (1.0, 1.0, 1.0)
+    specular: tuple[float, float, float] = (1.0, 1.0, 1.0)
+    emissive: tuple[float, float, float] = (0.0, 0.0, 0.0)
     alpha: float = 1.0
-    cull_mode: int = 0
+    cull_mode: CullMode = CullMode.BACK
     wireframe: bool = False
 
 
@@ -239,10 +243,14 @@ class MaterialBuilder:
         for i, m in enumerate(self.model.materials):
             name = names[i] if i < len(names) else f"material{i}"
             im = ImportedMaterial(name)
-            im.diffuse = bgr555_to_float(m.diff_amb)
+            im.diffuse = bgr555_to_float(m.diff)
+            im.ambient = bgr555_to_float(m.amb)
+            im.specular = bgr555_to_float(m.spec)
+            im.emissive = bgr555_to_float(m.emi)
             im.alpha = m.alpha / 31.0
             im.cull_mode = m.cull_mode
             im.wireframe = m.hasflag(MatFlag.WIREFRAME)
+            im.tex_img_param = m.tex_image_param
 
             tex_name = self.model.materials.texture_name(i)
             pltt_name = self.model.materials.palette_name(i)

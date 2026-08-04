@@ -150,8 +150,8 @@ class ModelBuilder:
 
     def _build_shapes(self) -> mdl0.ShapeSet:
         shapes: dict[str, mdl0.Shape] = {}
-        for i, (shape, dl) in enumerate(zip(self.shapes, self.dls)):
-            shapes[shape.name] = mdl0.Shape.build(tag=i, flag=0, dl=dl)
+        for shape, dl in zip(self.shapes, self.dls):
+            shapes[shape.name] = mdl0.Shape.build(tag=0, flag=0, dl=dl)
 
         return mdl0.ShapeSet.build(shapes)
 
@@ -174,7 +174,7 @@ class ModelBuilder:
                 .polygon_count(tris)
                 .bounding_box(*(c / box_scale for c in lo),
                               *(e / box_scale for e in extent))
-                .box_pos_scale(self.pos_scale)
+                .box_pos_scale(box_scale)
                 .build()
         )
 
@@ -229,10 +229,16 @@ def _snap(v: float) -> float:
 def _build_material(mat: ImportedMaterial) -> mdl0.Material:
     # TODO: Clean this up
     alpha = bin.clamp(int(round(mat.alpha * 31)), 0, 31)
-    poly_attr = (alpha << 16) | ((mat.cull_mode & 0x3) << 6)
+    poly_attr = mdl0.PolygonAttr.build(
+        alpha=alpha,
+        cull_mode=mat.cull_mode
+    )
     return (
         mdl0.Material.builder()
             .diffuse(mat.diffuse)
+            .ambient(mat.ambient)
+            .specular(mat.specular)
+            .emissive(mat.emissive)
             .poly_attr(poly_attr, 0x3F1FFFFF)
             .build()
     )

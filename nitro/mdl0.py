@@ -39,6 +39,97 @@ class MatFlag(IntEnum):
     EFFECTMTX = 1 << 13
 
 
+class CullMode(IntEnum):
+    ALL = 0
+    FRONT = 1
+    BACK = 2
+    NONE = 3
+
+
+class PolygonMode(IntEnum):
+    MODULATE = 0
+    DECAL = 1
+    TOON = 2
+    SHADOW = 3
+
+
+class PolygonAttr:
+    def __init__(self, v: int):
+        self.v = v
+
+    @property
+    def lights(self) -> int:
+        return self.v & 0xF
+
+    @property
+    def mode(self) -> PolygonMode:
+        return PolygonMode((self.v >> 4) & 0x3)
+
+    @property
+    def cull_mode(self) -> CullMode:
+        return CullMode((self.v >> 6) & 0x3)
+
+    @property
+    def alpha(self) -> int:
+        return (self.v >> 16) & 0x1f
+
+    @property
+    def id(self) -> int:
+        return (self.v >> 24) & 0x3F
+
+    @property
+    def xlu_depth_update(self) -> bool:
+        return ((self.v >> 11) & 1) != 0
+
+    @property
+    def far_clipping(self) -> bool:
+        return ((self.v >> 12) & 1) != 0
+
+    @property
+    def disp_1dot(self) -> bool:
+        return ((self.v >> 13) & 1) != 0
+
+    @property
+    def depthtest_decal(self) -> bool:
+        return ((self.v >> 14) & 1) != 0
+
+    @property
+    def fog(self) -> bool:
+        return ((self.v >> 15) & 1) != 0
+
+    def __eq__(self, value):
+        if isinstance(value, PolygonAttr):
+            return self.v == value.v
+        if isinstance(value, int):
+            return self.v == value
+        return False
+
+    @classmethod
+    def build(cls,
+              mode: PolygonMode,
+              cull: CullMode,
+              alpha: int,
+              lights: int = 0,
+              id: int = 0,
+              xlu_depth_update: bool = False,
+              far_clipping: bool = False,
+              disp_1dot: bool = False,
+              depthtest_decal: bool = False,
+              fog: bool = False) -> PolygonAttr:
+        v = 0
+        v |= (lights & 0xF)
+        v |= (int(mode) & 0x3) << 4
+        v |= (int(cull) & 0x3) << 6
+        v |= (1 if xlu_depth_update else 0) << 11
+        v |= (1 if far_clipping else 0) << 12
+        v |= (1 if disp_1dot else 0) << 13
+        v |= (1 if depthtest_decal else 0) << 14
+        v |= (1 if fog else 0) << 15
+        v |= (alpha & 0x1F) << 16
+        v |= (id & 0x3F) << 24
+        return cls(v)
+
+
 class MDL0:
     SIGNATURE = "MDL0"
 
@@ -483,9 +574,11 @@ class Material:
     def __init__(self, r: BinaryReader):
         self.tag = r.read_u16()
         self.size = r.read_u16()
-        self.diff_amb = r.read_u32()
-        self.spec_emi = r.read_u32()
-        self.poly_attr = r.read_u32()
+        self.diff = r.read_u16()
+        self.amb = r.read_u16()
+        self.spec = r.read_u16()
+        self.emi = r.read_u16()
+        self.poly_attr = PolygonAttr(r.read_u32())
         self.poly_attr_mask = r.read_u32()
         self.tex_image_param = TexImageParam(r.read_u32())
         self.tex_image_param_mask = r.read_u32()
@@ -515,9 +608,11 @@ class Material:
     def write(self, w: BinaryWriter):
         w.write_u16(self.tag)
         w.write_u16(self.size)
-        w.write_u32(self.diff_amb)
-        w.write_u32(self.spec_emi)
-        w.write_u32(self.poly_attr)
+        w.write_u16(self.diff)
+        w.write_u16(self.amb)
+        w.write_u16(self.spec)
+        w.write_u16(self.emi)
+        w.write_u32(self.poly_attr.v)
         w.write_u32(self.poly_attr_mask)
         w.write_u32(self.tex_image_param.v)
         w.write_u32(self.tex_image_param_mask)
@@ -559,12 +654,12 @@ class Material:
         return self.tex_image_param.format
 
     @property
-    def cull_mode(self) -> int:
-        return (self.poly_attr >> 6) & 0x3
+    def cull_mode(self) -> CullMode:
+        return self.poly_attr.cull_mode
 
     @property
     def alpha(self) -> int:
-        return (self.poly_attr >> 16) & 0x1F
+        return self.poly_attr.alpha
 
 
 class _MatBuilder:
@@ -574,9 +669,9 @@ class _MatBuilder:
         self._amb = (0.0, 0.0, 0.0)
         self._spec = (0.0, 0.0, 0.0)
         self._emi = (0.0, 0.0, 0.0)
-        self._poly_attr = 0
+        self._poly_attr = PolygonAttr(0)
         self._poly_attr_mask = 0
-        self._tex_image_param = 0
+        self._tex_image_param = TexImageParam(0)
         self._tex_image_param_mask = 0
         self._tex_pltt_base = 0
         self._flag = MatFlag.TEXMTX_SCALE_ONE | MatFlag.TEXMTX_ROTATION_ZERO | MatFlag.TEXMTX_TRANSLATION_ZERO
@@ -612,7 +707,7 @@ class _MatBuilder:
         self._emi = emissive
         return self
 
-    def poly_attr(self, attr: int, mask: int) -> _MatBuilder:
+    def poly_attr(self, attr: PolygonAttr, mask: int) -> _MatBuilder:
         self._poly_attr = attr
         self._poly_attr_mask = mask
         return self
@@ -666,14 +761,10 @@ class _MatBuilder:
     def build(self) -> Material:
         mat = Material.__new__(Material)
         mat.tag = self._tag
-        mat.diff_amb = (
-            (float_to_bgr555(*self._amb) << 16)
-            | float_to_bgr555(*self._diff)
-        )
-        mat.spec_emi = (
-            (float_to_bgr555(*self._emi) << 16)
-            | float_to_bgr555(*self._spec)
-        )
+        mat.diff = float_to_bgr555(*self._diff)
+        mat.amb = float_to_bgr555(*self._amb)
+        mat.spec = float_to_bgr555(*self._spec)
+        mat.emi = float_to_bgr555(*self._emi)
         mat.poly_attr = self._poly_attr
         mat.poly_attr_mask = self._poly_attr_mask
         mat.tex_image_param = self._tex_image_param
