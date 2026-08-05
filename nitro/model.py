@@ -1,11 +1,12 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Callable
+import math
 import numpy as np
 from . import texture
 from .binary import bgr555_to_float
 from .nsbmd import NSBMD
-from .mdl0 import Model, MatFlag, CullMode
+from .mdl0 import Model, MatFlag, PolygonAttr
 from .tex0 import TEX0, TexFmt, TexImageParam
 from .dl import GeometryBuilder, Triangle, Vertex
 from .sbc import SbcInterpreter, DrawCall
@@ -51,14 +52,29 @@ class ImportedMesh:
 class ImportedMaterial:
     name: str
     texture: DecodedTexture | None = None
+    tex_name: str | None = None
+    pltt_name: str | None = None
+    # Size the UVs were created against, (0, 0) means untextured
+    tex_size: tuple[int, int] = (0, 0)
     tex_img_param: TexImageParam | None = None
     diffuse: tuple[float, float, float] = (1.0, 1.0, 1.0)
     ambient: tuple[float, float, float] = (1.0, 1.0, 1.0)
     specular: tuple[float, float, float] = (1.0, 1.0, 1.0)
     emissive: tuple[float, float, float] = (0.0, 0.0, 0.0)
     alpha: float = 1.0
-    cull_mode: CullMode = CullMode.BACK
+    polygon_attr: PolygonAttr | None = None
+    tex_scale: tuple[float, float] = (1.0, 1.0)
+    tex_rotation: float = 0.0
+    tex_translation: tuple[float, float] = (0.0, 0.0)
     wireframe: bool = False
+    has_diffuse: bool = True
+    has_ambient: bool = True
+    has_specular: bool = True
+    has_emissive: bool = True
+    has_tex_pltt_base: bool = True
+    has_vtxcolor: bool = True
+    has_shininess: bool = True
+    shininess_table: bool = False
 
 
 @dataclass(slots=True)
@@ -68,8 +84,6 @@ class DecodedTexture:
     height: int
     rgba: bytes
     has_alpha: bool
-    tex_name: str = None
-    pltt_name: str = None
     fmt: TexFmt = TexFmt.NONE
     color0_transparent: bool = False
 
@@ -248,14 +262,26 @@ class MaterialBuilder:
             im.specular = bgr555_to_float(m.spec)
             im.emissive = bgr555_to_float(m.emi)
             im.alpha = m.alpha / 31.0
-            im.cull_mode = m.cull_mode
+            im.polygon_attr = m.poly_attr
             im.wireframe = m.hasflag(MatFlag.WIREFRAME)
             im.tex_img_param = m.tex_image_param
+            im.tex_size = (m.orig_width, m.orig_height)
+            im.tex_scale = (m.scale_s, m.scale_t)
+            im.tex_rotation = math.atan2(m.rot_sin, m.rot_cos)
+            im.tex_translation = (m.trans_s, m.trans_t)
+            im.has_diffuse = m.hasflag(MatFlag.DIFFUSE)
+            im.has_ambient = m.hasflag(MatFlag.AMBIENT)
+            im.has_specular = m.hasflag(MatFlag.SPECULAR)
+            im.has_emissive = m.hasflag(MatFlag.EMISSION)
+            im.has_tex_pltt_base = m.hasflag(MatFlag.TEXPLTTBASE)
+            im.has_vtxcolor = m.hasflag(MatFlag.VTXCOLOR)
+            im.has_shininess = m.hasflag(MatFlag.SHININESS)
+            im.shininess_table = bool(m.spec & 0x8000)
 
-            tex_name = self.model.materials.texture_name(i)
-            pltt_name = self.model.materials.palette_name(i)
-            if self.tex_set and tex_name is not None:
-                im.texture = self._resolve_texture(tex_name, pltt_name)
+            im.tex_name = self.model.materials.texture_name(i)
+            im.pltt_name = self.model.materials.palette_name(i)
+            if self.tex_set and im.tex_name is not None:
+                im.texture = self._resolve_texture(im.tex_name, im.pltt_name)
             mats.append(im)
         return mats
 
@@ -276,7 +302,8 @@ class MaterialBuilder:
         has_alpha = entry.fmt.has_alpha() or entry.transparent_color
 
         disp_name = self._display_name(tex_name, pal_name)
-        dt = DecodedTexture(disp_name, w, h, rgba, has_alpha)
+        dt = DecodedTexture(disp_name, w, h, rgba, has_alpha,
+                            entry.fmt, entry.transparent_color)
 
         self.tex_cache[ckey] = dt
         self.textures[disp_name] = dt

@@ -289,7 +289,7 @@ class TestMaterials:
         imported, _ = loaded
         for sub in imported.models:
             for m in sub.materials:
-                assert 0 <= m.cull_mode <= 3, f"{sub.name}/{m.name}"
+                assert 0 <= m.polygon_attr.cull_mode <= 3, f"{sub.name}/{m.name}"
 
 
 class TestTextures:

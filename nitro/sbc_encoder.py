@@ -3,9 +3,15 @@ from dataclasses import dataclass
 from .model import ImportedSubModel, ImportedMesh, Bone
 from .binary import BinaryWriter
 from .sbc import SbcCmd, SbcOpt
+from .tex0 import TexGen
 from . import matrix as mat
 import numpy as np
 from collections import Counter, defaultdict
+
+_TEXGEN_CMDS = {
+    TexGen.NORMAL: SbcCmd.ENVMAP,
+    TexGen.VERTEX: SbcCmd.PRJMAP,
+}
 
 
 class SbcEncoder:
@@ -96,7 +102,7 @@ class SbcEncoder:
 
         cmd = _make_sbc_cmd(SbcCmd.NODEDESC, opt)
 
-        self.sbc.write_u8(int(cmd))
+        self.sbc.write_u8(cmd)
         self.sbc.write_u8(node.id)
         self.sbc.write_u8(node.parent)
         self.sbc.write_u8(0)  # TODO: flags
@@ -107,13 +113,13 @@ class SbcEncoder:
 
     def _emit_node(self, node: int, visible: bool):
         cmd = _make_sbc_cmd(SbcCmd.NODE)
-        self.sbc.write_u8(int(cmd))
+        self.sbc.write_u8(cmd)
         self.sbc.write_u8(node)
         self.sbc.write_u8(1 if visible else 0)
 
     def _emit_mtx(self, slot: int):
         cmd = _make_sbc_cmd(SbcCmd.MTX)
-        self.sbc.write_u8(int(cmd))
+        self.sbc.write_u8(cmd)
         self.sbc.write_u8(slot)
 
     def _emit_posscale(self, inverse: bool = False):
@@ -121,25 +127,39 @@ class SbcEncoder:
             SbcCmd.POSSCALE,
             SbcOpt.INVERSE if inverse else SbcOpt.NONE
         )
-        self.sbc.write_u8(int(cmd))
+        self.sbc.write_u8(cmd)
 
     def _emit_mat(self, idx: int):
         cmd = _make_sbc_cmd(SbcCmd.MAT)
-        self.sbc.write_u8(int(cmd))
+        self.sbc.write_u8(cmd)
         self.sbc.write_u8(idx)
+        self._emit_texgen(idx)
+
+    def _emit_texgen(self, idx: int):
+        if idx >= len(self.model.materials):
+            return
+
+        param = self.model.materials[idx].tex_img_param
+        cmd = _TEXGEN_CMDS.get(param.texgen) if param else None
+        if cmd is None:
+            return
+
+        self.sbc.write_u8(_make_sbc_cmd(cmd))
+        self.sbc.write_u8(idx)
+        self.sbc.write_u8(0)
 
     def _emit_shp(self, idx: int):
         cmd = _make_sbc_cmd(SbcCmd.SHP)
-        self.sbc.write_u8(int(cmd))
+        self.sbc.write_u8(cmd)
         self.sbc.write_u8(idx)
 
     def _emit_ret(self):
         cmd = _make_sbc_cmd(SbcCmd.RET)
-        self.sbc.write_u8(int(cmd))
+        self.sbc.write_u8(cmd)
 
     def _emit_nop(self):
         cmd = _make_sbc_cmd(SbcCmd.NOP)
-        self.sbc.write_u8(int(cmd))
+        self.sbc.write_u8(cmd)
 
 
 def _make_sbc_cmd(cmd: SbcCmd, opt: SbcOpt = SbcOpt.NONE) -> int:

@@ -1,6 +1,7 @@
 
 from __future__ import annotations
 from dataclasses import dataclass
+import math
 import numpy as np
 
 from . import matrix as mat
@@ -10,11 +11,17 @@ from .dl_encoder import DlEncoder
 from .model import ImportedSubModel, ImportedMesh, ImportedMaterial, Bone
 from .quantize import box_exponent_for, pos_scale_for
 from .sbc_encoder import SbcEncoder, BoneMapping
+from .tex0 import TexGen, TexImageParam
 
 MAX_NODES = 255
 MAX_SHAPES = 255
 MAX_MATERIALS = 255
 EPSILON = 1e-6
+
+_IDENTITY_MTX = [1.0, 0.0, 0.0, 0.0,
+                 0.0, 1.0, 0.0, 0.0,
+                 0.0, 0.0, 1.0, 0.0,
+                 0.0, 0.0, 0.0, 1.0]
 
 
 class ModelBuilder:
@@ -129,7 +136,6 @@ class ModelBuilder:
         return mdl0.NodeSet.build(nodes)
 
     def _build_materials(self) -> mdl0.MaterialSet:
-        # TODO: Make this not lossy
         if len(self.sub.materials) > MAX_MATERIALS:
             raise ValueError(
                 f"{len(self.sub.materials)} materials exceeds the maximum of {MAX_MATERIALS}"
@@ -142,9 +148,8 @@ class ModelBuilder:
         for imat in self.sub.materials:
             names.append(imat.name)
             mats.append(_build_material(imat))
-            tex = imat.texture
-            tex_names.append(tex.tex_name if tex else None)
-            pal_names.append(tex.pltt_name if tex else None)
+            tex_names.append(imat.tex_name)
+            pal_names.append(imat.pltt_name)
 
         return mdl0.MaterialSet.build(names, mats, tex_names, pal_names)
 
@@ -227,21 +232,72 @@ def _snap(v: float) -> float:
 
 
 def _build_material(mat: ImportedMaterial) -> mdl0.Material:
-    # TODO: Clean this up
-    alpha = bin.clamp(int(round(mat.alpha * 31)), 0, 31)
-    poly_attr = mdl0.PolygonAttr.build(
-        alpha=alpha,
-        cull_mode=mat.cull_mode
+    poly_attr = mdl0.PolygonAttr(
+        mat.polygon_attr.v if mat.polygon_attr else mdl0.PolygonAttr.build().v
     )
+    poly_attr.set_alpha(bin.clamp(int(round(mat.alpha * 31)), 0, 31))
+
+    tip = mat.tex_img_param or TexImageParam(0)
+
+    # An env/projection-mapped material transforms UVs with the effect matrix instead of an SRT
+    env_mapped = tip.texgen in (TexGen.NORMAL, TexGen.VERTEX)
+    orig_w, orig_h = mat.tex_size
+    if (orig_w, orig_h) == (0, 0) and mat.texture is not None:
+        orig_w, orig_h = mat.texture.width, mat.texture.height
+
     return (
         mdl0.Material.builder()
             .diffuse(mat.diffuse)
             .ambient(mat.ambient)
             .specular(mat.specular)
             .emissive(mat.emissive)
-            .poly_attr(poly_attr, 0x3F1FFFFF)
+            .tex_image_param(tip, 0xFFFFFFFF)
+        # polyAttrMask says which bits the material owns and which fall through to the global state.
+        # 0x3F1F80FF also appears but very rarely, so just use the wider mask to avoid parts of the
+        # material being ignored.
+            .poly_attr(poly_attr, 0x3F1FF8FF)
+            .tex_pltt_base(0)
+            .orig_size(orig_w, orig_h)
+            .tex_scale(*mat.tex_scale)
+            .tex_rotation(math.sin(mat.tex_rotation), math.cos(mat.tex_rotation))
+            .tex_translation(*mat.tex_translation)
+            .effect_matrix(list(_IDENTITY_MTX) if env_mapped else None)
+            .shininess_table(mat.shininess_table)
+            .flags(_material_flags(mat, env_mapped))
             .build()
     )
+
+
+def _material_flags(mat: ImportedMaterial, env_mapped: bool) -> int:
+    flags = int(mdl0.MatFlag.NONE)
+    if mat.has_diffuse:
+        flags |= mdl0.MatFlag.DIFFUSE
+    if mat.has_ambient:
+        flags |= mdl0.MatFlag.AMBIENT
+    if mat.has_specular:
+        flags |= mdl0.MatFlag.SPECULAR
+    if mat.has_emissive:
+        flags |= mdl0.MatFlag.EMISSION
+    if mat.has_vtxcolor:
+        flags |= mdl0.MatFlag.VTXCOLOR
+    if mat.has_shininess:
+        flags |= mdl0.MatFlag.SHININESS
+    if mat.has_tex_pltt_base:
+        flags |= mdl0.MatFlag.TEXPLTTBASE
+    if mat.wireframe:
+        flags |= mdl0.MatFlag.WIREFRAME
+
+    # TEXMTX_USE means "the texture matrix isn't identity", which is either a
+    # non-default SRT or an env/proj mapping
+    if env_mapped or _has_tex_matrix(mat):
+        flags |= mdl0.MatFlag.TEXMTX_USE
+    return flags
+
+
+def _has_tex_matrix(mat: ImportedMaterial) -> bool:
+    return (tuple(mat.tex_scale) != (1.0, 1.0)
+            or mat.tex_rotation != 0.0
+            or tuple(mat.tex_translation) != (0.0, 0.0))
 
 
 def _world_bounds(sub: ImportedSubModel):

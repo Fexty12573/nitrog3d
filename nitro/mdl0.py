@@ -97,6 +97,10 @@ class PolygonAttr:
     def fog(self) -> bool:
         return ((self.v >> 15) & 1) != 0
 
+    def set_alpha(self, alpha: int):
+        self.v &= ~(0x1F << 16)
+        self.v |= (alpha & 0x1F) << 16
+
     def __eq__(self, value):
         if isinstance(value, PolygonAttr):
             return self.v == value.v
@@ -106,9 +110,9 @@ class PolygonAttr:
 
     @classmethod
     def build(cls,
-              mode: PolygonMode,
-              cull: CullMode,
-              alpha: int,
+              mode: PolygonMode = PolygonMode.MODULATE,
+              cull: CullMode = CullMode.BACK,
+              alpha: int = 31,
               lights: int = 0,
               id: int = 0,
               xlu_depth_update: bool = False,
@@ -662,6 +666,10 @@ class Material:
         return self.poly_attr.alpha
 
 
+_DERIVED_FLAGS = (MatFlag.TEXMTX_SCALE_ONE | MatFlag.TEXMTX_ROTATION_ZERO
+                  | MatFlag.TEXMTX_TRANSLATION_ZERO | MatFlag.EFFECTMTX)
+
+
 class _MatBuilder:
     def __init__(self):
         self._tag = 0
@@ -686,6 +694,7 @@ class _MatBuilder:
         self._trans_s = 0.0
         self._trans_t = 0.0
         self._effect_mtx: list[float] | None = None
+        self._shininess_table = False
 
     def tag(self, tag: int) -> _MatBuilder:
         self._tag = tag
@@ -712,9 +721,18 @@ class _MatBuilder:
         self._poly_attr_mask = mask
         return self
 
-    def tex_image_param(self, param: TexImageParam, mask: int) -> _MatBuilder:
-        self._tex_image_param = param
+    def tex_image_param(self, param: TexImageParam | None, mask: int) -> _MatBuilder:
+        self._tex_image_param = param or TexImageParam(0)
         self._tex_image_param_mask = mask
+        return self
+
+    def shininess_table(self, enabled: bool) -> _MatBuilder:
+        """Bit 15 of MaterialColor1 -- use the specular reflection table."""
+        self._shininess_table = enabled
+        return self
+
+    def flags(self, flags: MatFlag | int) -> _MatBuilder:
+        self._flag |= int(flags) & ~_DERIVED_FLAGS
         return self
 
     def tex_pltt_base(self, base: int) -> _MatBuilder:
@@ -765,6 +783,10 @@ class _MatBuilder:
         mat.amb = float_to_bgr555(*self._amb)
         mat.spec = float_to_bgr555(*self._spec)
         mat.emi = float_to_bgr555(*self._emi)
+        if self._flag & MatFlag.VTXCOLOR:
+            mat.diff |= 0x8000
+        if self._shininess_table:
+            mat.spec |= 0x8000
         mat.poly_attr = self._poly_attr
         mat.poly_attr_mask = self._poly_attr_mask
         mat.tex_image_param = self._tex_image_param

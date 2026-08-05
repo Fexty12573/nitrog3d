@@ -5,6 +5,7 @@ from bpy_extras.io_utils import axis_conversion
 from dataclasses import dataclass
 from mathutils import Matrix, Vector
 from ..nitro import model as mdl
+from ..nitro.mdl0 import CullMode
 
 
 @dataclass
@@ -126,7 +127,10 @@ def _make_material(imat: mdl.ImportedMaterial, image_cache: dict[str, bpy.types.
     if imat.alpha < 1.0 and "Alpha" in bsdf.inputs:
         bsdf.inputs["Alpha"].default_value = imat.alpha
 
-    mat.use_backface_culling = (imat.cull_mode == 2)
+    mat.use_backface_culling = (
+        imat.polygon_attr is not None
+        and imat.polygon_attr.cull_mode == CullMode.BACK
+    )
     return mat
 
 
