@@ -3,15 +3,18 @@ from dataclasses import dataclass
 from .model import ImportedSubModel, ImportedMesh, Bone
 from .binary import BinaryWriter
 from .sbc import SbcCmd, SbcOpt
+from .sbc_commands import *
 from .tex0 import TexGen
-from . import matrix as mat
 import numpy as np
-from collections import Counter, defaultdict
+from collections import defaultdict
 
-_TEXGEN_CMDS = {
-    TexGen.NORMAL: SbcCmd.ENVMAP,
-    TexGen.VERTEX: SbcCmd.PRJMAP,
+_TEXGEN_CMDS: dict[TexGen, type[SbcEnvMap | SbcPrjMap]] = {
+    TexGen.NORMAL: SbcEnvMap,
+    TexGen.VERTEX: SbcPrjMap,
 }
+
+# Usually 31 but G3D reserves 2 for its own purposes, so we only get to use 29
+MAX_MTX_SLOTS = 29
 
 
 class SbcEncoder:
@@ -22,12 +25,12 @@ class SbcEncoder:
         self.id_map[-1] = 0
         self.shape_map = shape_map
         self.nodes: list[Node] = []
+        self.cmds: list[SbcCommand] = []
         self.sbc = BinaryWriter()
         self.next_mtx_stack_id = 0
-        self.last_desc: Node | None = None
-        self.last_material: int | None = None
-        self.current_bound_node = -1
         self.current_bound_mat = -1
+        self.live_after: list[bool] = []
+        self.dies_at: list[list[int]] = []
 
         assert all(len(set(m.vertex_bone)) ==
                    1 for m in model.meshes), "multi matrix shapes not supported yet"
@@ -38,101 +41,115 @@ class SbcEncoder:
         for m, n in mesh_nodes:
             self.node_to_mesh[self.id_map[n]].append(m)
 
-        self.mtx_read_nodes = {
-            self.id_map[n] for m in model.meshes for n in set(m.vertex_bone)
-        }
-
-        # TODO: Use for "is STORE necessary" checks
-        parents = Counter([b.parent for id, b in self.bones if b.parent != id])
-        self.branches = {self.id_map[k] for k, v in parents.items() if v > 1}
-
     def encode(self) -> bytes:
-        # Step 1: NODEDESCs
+        self._phase1()
+        self._phase2()
+        self._phase3()
+
+        for cmd in self.cmds:
+            self.sbc.write_bytes(cmd.to_bytes())
+
+        return self.sbc.get_bytes()
+
+    def _phase1(self):
+        # Phase 1: Emit the command stream, but don't care about matrix stack slots.
+        # Draws are interleaved with NODEDESCs to reduce matrix stack usage.
+
         for id, bone in self.bones:
             node = Node(
                 id=self.id_map[id],
                 parent=self.id_map[bone.parent] if bone.parent != id else self.id_map[id],
                 world_mtx=bone.world_mtx,
-                mtx_slot=self.next_mtx_stack_id
             )
-            self.next_mtx_stack_id += 1
 
             self.nodes.append(node)
             self._emit_nodedesc(node)
-            self.last_desc = node
 
-        # Step 2: Draw Shapes
-        for bound_node, meshes in self.node_to_mesh.items():
-            # All meshes bound to this node have the same visibility
-            self._emit_node(bound_node, meshes[0].visible)
+            meshes = self.node_to_mesh.get(node.id)
+            if meshes:
+                self._emit_draw_group(node.id, meshes)
 
-            if self.current_bound_node != bound_node:
-                slot = self.nodes[bound_node].mtx_slot
-                self._emit_mtx(slot)
-                self.current_bound_node = bound_node
-
-            self._emit_posscale()
-
-            for mesh in meshes:
-                if self.current_bound_mat != mesh.material:
-                    self._emit_mat(mesh.material)
-                    self.current_bound_mat = mesh.material
-
-                self._emit_shp(self.shape_map[mesh.name])
-
-        self._emit_posscale(True)
         self._emit_ret()
 
-        return self.sbc.get_bytes()
+    def _emit_draw_group(self, node: int, meshes: list[ImportedMesh]):
+        # All meshes bound to this node share its visibility
+        self._emit_node(node, meshes[0].visible)
+
+        self._emit_posscale()
+        for mesh in meshes:
+            if self.current_bound_mat != mesh.material:
+                self._emit_mat(mesh.material)
+                self.current_bound_mat = mesh.material
+
+            self._emit_shp(self.shape_map[mesh.name])
+        self._emit_posscale(inverse=True)
+
+    def _phase2(self):
+        # Phase 2: Compute liveness of bound matrices and when they die, so we can
+        # more efficiently allocate matrix stack slots in phase 3.
+        n = len(self.cmds)
+        self.live_after = [False] * n
+        self.dies_at = [[] for _ in range(n)]
+
+        seen: set[int] = set()
+        for i in range(n - 1, -1, -1):
+            cmd = self.cmds[i]
+            bound = cmd.binds()
+            self.live_after[i] = bound is not None and bound in seen
+            for node in cmd.reads():
+                if node not in seen:
+                    seen.add(node)
+                    self.dies_at[i].append(node)
+
+    def _phase3(self):
+        # Phase 3: Allocate matrix stack slots
+        slots: list[int | None] = [None] * MAX_MTX_SLOTS
+        where: dict[int, int] = {}
+        current: int | None = None
+        highest_slot = 0
+
+        for i, cmd in enumerate(self.cmds):
+            need = cmd.needs()
+            if need is not None and need != current:
+                if need not in where:
+                    raise ValueError(
+                        f"node {need}'s matrix is needed at command {i} but was never stored"
+                    )
+                cmd.set_restore(where[need])
+                current = need
+
+            bound = cmd.binds()
+            if bound is not None:
+                current = bound
+                if self.live_after[i] and bound not in where:
+                    slot = _lowest_free(slots)
+                    slots[slot] = bound
+                    where[bound] = slot
+                    cmd.store(slot)
+                    highest_slot = max(highest_slot, slot + 1)
+
+            # Check for any matrices that die at this command and free their slots for reuse
+            for dead in self.dies_at[i]:
+                slot = where.pop(dead, None)
+                if slot is not None:
+                    slots[slot] = None
+
+        self.next_mtx_stack_id = highest_slot
 
     def _emit_nodedesc(self, node: Node):
-        self.current_bound_node = node.id
-
-        # local = mat.inverse(self.model.bones[bone.parent].world_mtx) @ bone.world_mtx
-
-        opt = SbcOpt.NONE
-        store = node.id in self.branches or node.id in self.mtx_read_nodes
-        if store:
-            opt |= SbcOpt.STORE
-
-        # If the last node is NOT our parent, we need to restore the actual parent node's matrix slot
-        restore = self.last_desc is not None and self.last_desc.id != node.parent
-        if restore:
-            opt |= SbcOpt.RESTORE
-
-        cmd = _make_sbc_cmd(SbcCmd.NODEDESC, opt)
-
-        self.sbc.write_u8(cmd)
-        self.sbc.write_u8(node.id)
-        self.sbc.write_u8(node.parent)
-        self.sbc.write_u8(0)  # TODO: flags
-        if store:
-            self.sbc.write_u8(node.mtx_slot)
-        if restore:
-            self.sbc.write_u8(self.nodes[node.parent].mtx_slot)
+        self.cmds.append(SbcNodeDesc(node=node.id, parent=node.parent))
 
     def _emit_node(self, node: int, visible: bool):
-        cmd = _make_sbc_cmd(SbcCmd.NODE)
-        self.sbc.write_u8(cmd)
-        self.sbc.write_u8(node)
-        self.sbc.write_u8(1 if visible else 0)
+        self.cmds.append(SbcNode(node=node, visible=visible))
 
-    def _emit_mtx(self, slot: int):
-        cmd = _make_sbc_cmd(SbcCmd.MTX)
-        self.sbc.write_u8(cmd)
-        self.sbc.write_u8(slot)
+    def _emit_mtx(self, node: int):
+        self.cmds.append(SbcMtx(node=node))
 
     def _emit_posscale(self, inverse: bool = False):
-        cmd = _make_sbc_cmd(
-            SbcCmd.POSSCALE,
-            SbcOpt.INVERSE if inverse else SbcOpt.NONE
-        )
-        self.sbc.write_u8(cmd)
+        self.cmds.append(SbcPosScale(inverse=inverse))
 
     def _emit_mat(self, idx: int):
-        cmd = _make_sbc_cmd(SbcCmd.MAT)
-        self.sbc.write_u8(cmd)
-        self.sbc.write_u8(idx)
+        self.cmds.append(SbcMat(idx=idx))
         self._emit_texgen(idx)
 
     def _emit_texgen(self, idx: int):
@@ -144,26 +161,25 @@ class SbcEncoder:
         if cmd is None:
             return
 
-        self.sbc.write_u8(_make_sbc_cmd(cmd))
-        self.sbc.write_u8(idx)
-        self.sbc.write_u8(0)
+        self.cmds.append(cmd(mat=idx))
 
     def _emit_shp(self, idx: int):
-        cmd = _make_sbc_cmd(SbcCmd.SHP)
-        self.sbc.write_u8(cmd)
-        self.sbc.write_u8(idx)
+        self.cmds.append(SbcShp(idx=idx))
 
     def _emit_ret(self):
-        cmd = _make_sbc_cmd(SbcCmd.RET)
-        self.sbc.write_u8(cmd)
+        self.cmds.append(SbcRet())
 
     def _emit_nop(self):
-        cmd = _make_sbc_cmd(SbcCmd.NOP)
-        self.sbc.write_u8(cmd)
+        self.cmds.append(SbcNop())
 
 
-def _make_sbc_cmd(cmd: SbcCmd, opt: SbcOpt = SbcOpt.NONE) -> int:
-    return int(cmd) | int(opt)
+def _lowest_free(slots: list[int | None]) -> int:
+    for i, occupant in enumerate(slots):
+        if occupant is None:
+            return i
+    raise ValueError(
+        f"Ran out of matrix stack slots (only {MAX_MTX_SLOTS} are usable). The model is too complex"
+    )
 
 
 @dataclass(slots=True)
@@ -171,7 +187,6 @@ class Node:
     id: int
     parent: int
     world_mtx: np.ndarray
-    mtx_slot: int | None = None
 
 
 @dataclass(slots=True)
