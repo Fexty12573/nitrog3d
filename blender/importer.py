@@ -172,6 +172,7 @@ def _build_armature(sub: mdl.ImportedSubModel, global_mtx: Matrix, bone_length: 
         eb = arm_data.edit_bones.new(bone.name)
         eb.head = (0.0, 0.0, 0.0)
         eb.tail = (0.0, bone_length, 0.0)
+        eb.inherit_scale = 'NONE' if bone.scale_compensate else 'FULL'
         full = global_mtx @ _ds_matrix_to_blender(bone.world_mtx)
         loc, rot, _ = full.decompose()
         eb.matrix = Matrix.Translation(loc) @ rot.to_matrix().to_4x4()

@@ -1,6 +1,6 @@
 
 import struct
-from .sbc import SbcCmd, SbcOpt
+from .sbc import SbcCmd, SbcOpt, NodeDescFlag
 
 
 class SbcCommand:
@@ -118,9 +118,10 @@ class SbcStackCommand(SbcCommand):
 
 
 class SbcNodeDesc(SbcStackCommand):
-    def __init__(self, node: int, parent: int):
+    def __init__(self, node: int, parent: int, flags: NodeDescFlag = NodeDescFlag.NONE):
         super().__init__(SbcCmd.NODEDESC, node)
         self.parent = parent
+        self.flags = flags
 
     @property
     def is_root(self) -> bool:
@@ -132,12 +133,15 @@ class SbcNodeDesc(SbcStackCommand):
     def reads(self) -> list[int]:
         return [] if self.is_root else [self.parent]
 
+    def ssc_parent(self):
+        self.flags |= NodeDescFlag.SSC_PARENT
+
     def to_bytes(self) -> bytes:
         base = super().to_bytes() + struct.pack(
             'BBB',
             self.node,
             self.parent,
-            0  # TODO: flags
+            int(self.flags)
         )
         if self.store_slot is not None:
             base += struct.pack('B', self.store_slot)

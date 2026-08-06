@@ -2,7 +2,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from .model import ImportedSubModel, ImportedMesh, Bone
 from .binary import BinaryWriter
-from .sbc import SbcCmd, SbcOpt
+from .sbc import NodeDescFlag
 from .sbc_commands import *
 from .tex0 import TexGen
 import numpy as np
@@ -24,7 +24,7 @@ class SbcEncoder:
         self.id_map = mapping.id_map
         self.id_map[-1] = 0
         self.shape_map = shape_map
-        self.nodes: list[Node] = []
+        self.nodes: dict[int, Node] = {}
         self.cmds: list[SbcCommand] = []
         self.sbc = BinaryWriter()
         self.next_mtx_stack_id = 0
@@ -60,9 +60,11 @@ class SbcEncoder:
                 id=self.id_map[id],
                 parent=self.id_map[bone.parent] if bone.parent != id else self.id_map[id],
                 world_mtx=bone.world_mtx,
+                desc_idx=len(self.nodes),
+                ssc=bone.scale_compensate
             )
 
-            self.nodes.append(node)
+            self.nodes[node.id] = node
             self._emit_nodedesc(node)
 
             meshes = self.node_to_mesh.get(node.id)
@@ -137,7 +139,19 @@ class SbcEncoder:
         self.next_mtx_stack_id = highest_slot
 
     def _emit_nodedesc(self, node: Node):
-        self.cmds.append(SbcNodeDesc(node=node.id, parent=node.parent))
+        self.cmds.append(SbcNodeDesc(
+            node=node.id,
+            parent=node.parent,
+            flags=NodeDescFlag.SSC_APPLY if node.ssc else NodeDescFlag.NONE
+        ))
+
+        # If this node has SSC, we need to adjust all parents up the hierarchy
+        if node.ssc:
+            parent_id = node.parent
+            while parent_id != node.id:
+                parent_node = self.nodes[parent_id]
+                self.cmds[parent_node.desc_idx].ssc_parent()
+                parent_id = parent_node.parent
 
     def _emit_node(self, node: int, visible: bool):
         self.cmds.append(SbcNode(node=node, visible=visible))
@@ -178,7 +192,7 @@ def _lowest_free(slots: list[int | None]) -> int:
         if occupant is None:
             return i
     raise ValueError(
-        f"Ran out of matrix stack slots (only {MAX_MTX_SLOTS} are usable). The model is too complex"
+        f"Ran out of matrix stack slots. The model is too complex"
     )
 
 
@@ -187,6 +201,8 @@ class Node:
     id: int
     parent: int
     world_mtx: np.ndarray
+    desc_idx: int  # Index of this node's NODEDESC command
+    ssc: bool = False
 
 
 @dataclass(slots=True)

@@ -35,6 +35,13 @@ class SbcOpt(IntFlag):
     INVERSE = 0x20
 
 
+class NodeDescFlag(IntFlag):
+    # Segment-scale compensation flags
+    NONE = 0x00
+    SSC_APPLY = 0x01
+    SSC_PARENT = 0x02
+
+
 _RATIO_SCALE = 1.0 / 256.0
 _PIVOT_TABLE = [
     [
@@ -71,6 +78,7 @@ class SbcInterpreter:
         self.node_world = [mat.identity() for _ in range(n)]
         self.node_world_dir = [mat.identity() for _ in range(n)]
         self.node_seen = [False] * n
+        self.node_ssc = [False] * n
         # Nodes are visible by default, only NODE can turn them invisible
         self.node_visible = [True] * n
         self.billboard_nodes: dict[int, SbcCmd] = {}
@@ -86,6 +94,9 @@ class SbcInterpreter:
         self.current_draw_node = -1
         self.current_visible = True
         self.draw_calls: list[DrawCall] = []
+
+        self.maya_scaling = model.info.scaling_rule == 1
+        self.scale_cache: dict[int, tuple[float, float, float] | None] = {}
 
     def run(self):
         sbc = self.sbc
@@ -149,22 +160,40 @@ class SbcInterpreter:
             return r
         return np.array(node.rot_mtx()).reshape(3, 3)
 
-    def _apply_joint(self, node_id: int):
+    def _apply_joint(self, node_id: int, parent: int = -1, flags: int = 0):
         node = self.nodes[node_id]
         b = self.builder
         b.mtx_mode = MtxMode.POSITION_VECTOR
         trans_zero = node.hasflag(SrtFlag.TRANSLATION_ZERO)
         rot_zero = node.hasflag(SrtFlag.ROTATION_ZERO)
         scale_one = node.hasflag(SrtFlag.SCALE_ONE)
+
+        if self.maya_scaling and flags & NodeDescFlag.SSC_APPLY:
+            self.scale_cache[node_id] = (
+                None if scale_one else (node.inv_sx, node.inv_sy, node.inv_sz)
+            )
+
+        inv = None
+        if self.maya_scaling and flags & NodeDescFlag.SSC_APPLY:
+            inv = self.scale_cache.get(parent)
+
         rot3x3 = self._node_rot(node)
         trans = node.translation()
-        if not trans_zero:
+
+        if inv is not None:
+            if not trans_zero:
+                b.translate_vec(*trans)
+            b.scale_vec(*inv)
+            if not rot_zero:
+                b.mul(mat.from3x3(rot3x3))
+        elif not trans_zero:
             if not rot_zero:
                 b.mul(mat.from_rot_trans(rot3x3, trans))
             else:
                 b.translate_vec(trans[0], trans[1], trans[2])
         elif not rot_zero:
             b.mul(mat.from3x3(rot3x3))
+
         if not scale_one:
             b.scale_vec(node.sx, node.sy, node.sz)
 
@@ -244,6 +273,8 @@ class SbcInterpreter:
     def _do_nodedesc(self, off: int, opt: int) -> int:
         b = self.builder
         node_id = self.sbc[off + 1]
+        flags = self.sbc[off + 3]
+
         store, restore, num = self._stack_operands(off, opt, 4)
         if restore is not None:
             b.restore_mtx(restore)
@@ -251,11 +282,12 @@ class SbcInterpreter:
                 restore, self.current_node)
 
         parent = self.current_node
-        self._apply_joint(node_id)
+        self._apply_joint(node_id, parent=self.sbc[off + 2], flags=flags)
         self.node_parent[node_id] = parent
         self.node_world[node_id] = b.cur_pos
         self.node_world_dir[node_id] = b.cur_dir
         self.node_seen[node_id] = True
+        self.node_ssc[node_id] = bool(flags & NodeDescFlag.SSC_APPLY)
         if store is not None:
             b.store_mtx(store)
             self.stack_to_node[store] = node_id

@@ -167,8 +167,11 @@ class ModelBuilder:
         box_scale = float(1 << box_exponent_for(lo, extent))
         tris = sum(len(p.mesh.faces) for p in self.shapes)
 
+        maya_scaling = any(b.scale_compensate for _, b in self.bones)
+
         return (
             mdl0.ModelInfo.builder()
+                .scaling_rule(mdl0.ScalingRule.MAYA if maya_scaling else mdl0.ScalingRule.DEFAULT)
                 .node_count(len(self.bones))
                 .mat_count(len(self.sub.materials))
                 .shape_count(len(self.shapes))
@@ -211,12 +214,17 @@ def _remap_bone_ids(bones: list[tuple[int, Bone]]) -> dict[int, int]:
     return {old_id: new_id for new_id, (old_id, _) in enumerate(bones)}
 
 
-def _decompose_srt(m: np.ndarray):
+def _decompose_srt(m: np.ndarray, parent_scale: tuple[float, float, float] | None = None):
     t = tuple(_snap(v) for v in m[3, :3])
+    lin = m[:3, :3]
+    if parent_scale is not None:
+        # Apply SSC
+        lin = lin @ np.diag(parent_scale)
+
     s: list[float] = []
     r: list[float] = []
     for i in range(3):
-        row = m[i, :3]
+        row = lin[i, :3]
         n = float(np.linalg.norm(row))
         s.append(_snap(n))
         r.extend((row / n if n > EPSILON else row).tolist())

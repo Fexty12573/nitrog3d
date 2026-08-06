@@ -53,6 +53,12 @@ class PolygonMode(IntEnum):
     SHADOW = 3
 
 
+class ScalingRule(IntEnum):
+    DEFAULT = 0
+    MAYA = 1
+    SI3D = 2
+
+
 class PolygonAttr:
     def __init__(self, v: int):
         self.v = v
@@ -246,7 +252,7 @@ class Model:
 class ModelInfo:
     def __init__(self, r: BinaryReader):
         self.sbc_type = r.read_u8()
-        self.scaling_rule = r.read_u8()
+        self.scaling_rule = ScalingRule(r.read_u8())
         self.tex_mtx_mode = r.read_u8()
         self.node_count = r.read_u8()
         self.mat_count = r.read_u8()
@@ -270,7 +276,7 @@ class ModelInfo:
 
     def write(self, w: BinaryWriter):
         w.write_u8(self.sbc_type)
-        w.write_u8(self.scaling_rule)
+        w.write_u8(int(self.scaling_rule))
         w.write_u8(self.tex_mtx_mode)
         w.write_u8(self.node_count)
         w.write_u8(self.mat_count)
@@ -299,6 +305,7 @@ class ModelInfo:
 
 class _ModelInfoBuilder:
     def __init__(self):
+        self._scaling_rule = ScalingRule.DEFAULT
         self._node_count = 0
         self._mat_count = 0
         self._shape_count = 0
@@ -317,6 +324,10 @@ class _ModelInfoBuilder:
         self._box_d = 1.0
         self._box_pos_scale = 1.0
         self._box_inv_pos_scale = 1.0
+
+    def scaling_rule(self, rule: ScalingRule) -> _ModelInfoBuilder:
+        self._scaling_rule = rule
+        return self
 
     def node_count(self, count: int) -> _ModelInfoBuilder:
         self._node_count = count
@@ -372,7 +383,7 @@ class _ModelInfoBuilder:
     def build(self) -> ModelInfo:
         info = ModelInfo.__new__(ModelInfo)
         info.sbc_type = 0  # NNS_G3D_SBCTYPE_NORMAL
-        info.scaling_rule = 0  # NNS_G3D_SCALINGRULE_STANDARD TODO: Maybe make this a parameter
+        info.scaling_rule = self._scaling_rule
         info.tex_mtx_mode = 0  # NNS_G3D_TEXMTXMODE_MAYA
         info.node_count = self._node_count
         info.mat_count = self._mat_count
