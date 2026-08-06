@@ -5,24 +5,39 @@ from . import binary as bin
 from .dl import DlCmd, PrimType, NORMAL_SCALE, TEXCOORD_SCALE
 from .model import ImportedMesh
 from .sbc_encoder import SbcEncoder
-from .quantize import decide_vertex_form
+from .quantize import decide_vertex_form, to_fx
 from . import matrix as mat
 import struct
 import numpy as np
 
 
 class DlEncoder:
-    def __init__(self, mesh: ImportedMesh, node_mtx: np.ndarray, node_dir: np.ndarray, pos_scale: float):
-        assert len(set(mesh.vertex_bone)
-                   ) == 1, "multi matrix shapes not yet supported"
+    def __init__(self,
+                 mesh: ImportedMesh,
+                 mtx_map: dict[int, tuple[np.ndarray, np.ndarray]],
+                 bone_map: dict[int, int],
+                 entry_matrix: int | None,
+                 matrix_slots: dict[int, int],
+                 pos_scale: float):
+        assert len(set(mesh.vertex_bone)) <= 29, \
+            "Meshes with more than 29 bones are not supported"
 
         self.mesh = mesh
         self.dl = bin.BinaryWriter()
         self.cmds: list[_Command] = []
 
         S = mat.scale(pos_scale, pos_scale, pos_scale)
-        self.inv_pos = mat.inverse(S @ node_mtx)
-        self.inv_dir = mat.inverse(node_dir)
+        self.mtx_map = {
+            bone: _BoneMatrices(
+                pos=mat.inverse(S @ pos),
+                dir=mat.inverse(dir)
+            ) for bone, (pos, dir) in mtx_map.items()
+        }
+
+        self.bone_map = bone_map
+        self.entry_matrix = entry_matrix
+        self.matrix_slots = matrix_slots
+        self.pos_scale = pos_scale
 
         self.prev_normal: int | None = None
         self.prev_color: int | None = None
@@ -34,24 +49,34 @@ class DlEncoder:
     def encode(self) -> bytes:
         self._begin(PrimType.TRIANGLES)
 
-        for i, face in enumerate(self.mesh.faces):
-            v0 = self.mesh.vertices[face[0]]
-            v1 = self.mesh.vertices[face[1]]
-            v2 = self.mesh.vertices[face[2]]
+        current = self.entry_matrix
 
+        for i, face in _sorted_faces(self.mesh):
             base = i * 3
-            for j, v in enumerate((v0, v1, v2)):
+            for j, vi in enumerate(face):
+                bone = self.bone_map[self.mesh.vertex_bone[vi]]
+                if bone != current:
+                    self._restore_mtx(self.matrix_slots[bone])
+                    if self.pos_scale != 1.0:
+                        self._scale(
+                            self.pos_scale,
+                            self.pos_scale,
+                            self.pos_scale
+                        )
+                    current = bone
+
+                v = self.mesh.vertices[vi]
                 if self.mesh.has_uv:
                     uv = self.mesh.loop_uvs[base+j]
                     self._texcoord(uv)
                 if self.mesh.has_normals:
                     n = self.mesh.loop_normals[base+j]
-                    self._normal(n)
+                    self._normal(bone, n)
                 if self.mesh.has_colors:
                     c = self.mesh.loop_colors[base+j]
                     self._color(c)
 
-                self._vertex(v)
+                self._vertex(bone, v)
 
         self._end()
         self._flush()
@@ -64,8 +89,8 @@ class DlEncoder:
     def _end(self):
         self._emit(DlCmd.END)
 
-    def _normal(self, n: tuple[float, float, float]):
-        local = mat.mul_no_translate(n, self.inv_dir)
+    def _normal(self, bone: int, n: tuple[float, float, float]):
+        local = mat.mul_no_translate(n, self.mtx_map[bone].dir)
         encoded = _encode_normal(local)
         if encoded != self.prev_normal:
             self._emit(DlCmd.NORMAL, "<I", encoded)
@@ -83,8 +108,15 @@ class DlEncoder:
             self._emit(DlCmd.COLOR, "<I", encoded)
             self.prev_color = encoded
 
-    def _vertex(self, v: tuple[float, float, float]):
-        local = mat.mul(v, self.inv_pos)
+    def _restore_mtx(self, slot: int):
+        self._emit(DlCmd.RESTORE_MTX, "<I", slot)
+        self.prev_normal = None  # Matrix restore clears normal
+
+    def _scale(self, sx: float, sy: float, sz: float):
+        self._emit(DlCmd.SCALE, "<iii", to_fx(sx), to_fx(sy), to_fx(sz))
+
+    def _vertex(self, bone: int, v: tuple[float, float, float]):
+        local = mat.mul(v, self.mtx_map[bone].pos)
         vtx = tuple(map(bin.to_fx, local))
         self._emit_vtx(vtx)
         self.prev_vtx = vtx
@@ -174,6 +206,10 @@ def _encode_color(c: tuple[float, float, float]) -> int:
     return bin.float_to_bgr555(*c)
 
 
+def _sorted_faces(mesh: ImportedMesh) -> list[tuple[int, tuple[int, int, int]]]:
+    return list(enumerate(mesh.faces))  # TODO: Sort by bone
+
+
 def _encode_uv(uv: tuple[float, float]) -> int:
     s = int(round(uv[0] / TEXCOORD_SCALE)) & 0xFFFF
     t = int(round(uv[1] / TEXCOORD_SCALE)) & 0xFFFF
@@ -184,3 +220,9 @@ def _encode_uv(uv: tuple[float, float]) -> int:
 class _Command:
     cmd: DlCmd
     args: bytes = field(default_factory=bytes)
+
+
+@dataclass(slots=True)
+class _BoneMatrices:
+    pos: np.ndarray
+    dir: np.ndarray

@@ -10,7 +10,7 @@ from . import mdl0
 from .dl_encoder import DlEncoder
 from .model import ImportedSubModel, ImportedMesh, ImportedMaterial, Bone
 from .quantize import box_exponent_for, pos_scale_for
-from .sbc_encoder import SbcEncoder, BoneMapping
+from .sbc_encoder import SbcEncoder, BoneMapping, MAX_MTX_SLOTS
 from .tex0 import TexGen, TexImageParam
 
 MAX_NODES = 255
@@ -40,8 +40,8 @@ class ModelBuilder:
         self._plan_nodes()
         self._plan_shapes()
         self._compute_pos_scale()
-        self._encode_dls()
         self._encode_sbc()
+        self._encode_dls()
         nodeset = self._build_nodes()
         matset = self._build_materials()
         shapeset = self._build_shapes()
@@ -64,27 +64,19 @@ class ModelBuilder:
             )
 
     def _plan_shapes(self):
-        # TODO: We do one shape per mesh, grouped by bound node.
-        # Grouping is a temporary solution until encoding multi-mtx DLs is supported.
-        by_node: dict[int, list[ImportedMesh]] = {}
-        for mesh in self.sub.meshes:
-            bound = set(mesh.vertex_bone)
-            if len(bound) != 1:
-                raise NotImplementedError(
-                    f"{mesh.name}: multi-mtx shape ({len(bound)} nodes) not yet supported"
+        for i, mesh in enumerate(self.sub.meshes):
+            bones = set(mesh.vertex_bone)
+            if len(bones) > MAX_MTX_SLOTS:
+                raise ValueError(
+                    f"{mesh.name}: boundto {len(bones)} matrices, but the matrix "
+                    f"stack only has {MAX_MTX_SLOTS}. Split the mesh."
                 )
-
-            by_node.setdefault(
-                self.id_map[bound.pop()],
-                []
-            ).append(mesh)
-
-        for node, meshes in by_node.items():
-            for mesh in meshes:
-                i = len(self.shapes)
-                self.shapes.append(EmittedShape(
-                    i, mesh.name or f"shape{i}", mesh, node, mesh.material
-                ))
+            self.shapes.append(EmittedShape(
+                index=i,
+                name=mesh.name,
+                mesh=mesh,
+                material=mesh.material
+            ))
 
         if len(self.shapes) > MAX_SHAPES:
             raise ValueError(
@@ -94,16 +86,6 @@ class ModelBuilder:
     def _compute_pos_scale(self):
         self.pos_scale = pos_scale_for(self.sub)
 
-    def _encode_dls(self):
-        for shape in self.shapes:
-            bone = self.sub.bones[shape.mesh.vertex_bone[0]]
-            enc = DlEncoder(
-                shape.mesh, bone.world_mtx,
-                bone.world_dir_mtx, self.pos_scale
-            )
-            self.dls.append(enc.encode())
-            self.total_vertices += enc.total_vertices
-
     def _encode_sbc(self):
         enc = SbcEncoder(
             self.sub,
@@ -112,6 +94,27 @@ class ModelBuilder:
         )
         self.sbc = enc.encode()
         self.first_unused_mtx_stack_id = enc.next_mtx_stack_id
+        self.shape_matrices = enc.get_shape_matrices()
+
+    def _encode_dls(self):
+        for shape in self.shapes:
+            bones = [
+                self.bones[self.id_map[b]] for b in set(shape.mesh.vertex_bone)
+            ]
+
+            matrix_map = {
+                self.id_map[i]: (b.world_mtx, b.world_dir_mtx) for i, b in bones
+            }
+
+            enc = DlEncoder(
+                shape.mesh,
+                matrix_map,
+                self.id_map,
+                *self.shape_matrices[shape.index],
+                pos_scale=self.pos_scale
+            )
+            self.dls.append(enc.encode())
+            self.total_vertices += enc.total_vertices
 
     def _build_nodes(self) -> mdl0.NodeSet:
         nodes: dict[str, mdl0.NodeData] = {}
@@ -192,7 +195,6 @@ class EmittedShape:
     index: int
     name: str
     mesh: ImportedMesh
-    node: int  # remapped
     material: int
 
 

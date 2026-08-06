@@ -28,6 +28,9 @@ class SbcCommand:
     def set_restore(self, slot: int):
         raise NotImplementedError(f"{type(self).__name__} cannot restore")
 
+    def resolve(self, where: dict[int, int], current: int | None):
+        pass
+
 
 class SbcNop(SbcCommand):
     def __init__(self):
@@ -81,9 +84,24 @@ class SbcMat(SbcCommand):
 
 
 class SbcShp(SbcCommand):
-    def __init__(self, idx: int):
+    def __init__(self, idx: int, bones: list[int]):
         super().__init__(SbcCmd.SHP)
         self.idx = idx
+        self.bones = bones  # Matrices restored inside DL
+        self.slot_of: dict[int, int] = {}
+        self.entry_matrix: int | None = None
+
+    def reads(self) -> list[int]:
+        return self.bones
+
+    def resolve(self, where, current):
+        missing = [b for b in self.bones if b not in where]
+        if missing:
+            raise ValueError(
+                f"Shape {self.idx}: Matrices {missing} are not on the stack."
+            )
+        self.slot_of = {b: where[b] for b in self.bones}
+        self.entry_matrix = current
 
     def to_bytes(self) -> bytes:
         return super().to_bytes() + struct.pack('B', self.idx)

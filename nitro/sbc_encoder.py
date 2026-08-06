@@ -32,14 +32,12 @@ class SbcEncoder:
         self.live_after: list[bool] = []
         self.dies_at: list[list[int]] = []
 
-        assert all(len(set(m.vertex_bone)) ==
-                   1 for m in model.meshes), "multi matrix shapes not supported yet"
-        mesh_nodes = [(m, m.vertex_bone[0]) for m in model.meshes]
-
         self.node_to_mesh: defaultdict[int, list[ImportedMesh]] \
             = defaultdict(list)
-        for m, n in mesh_nodes:
-            self.node_to_mesh[self.id_map[n]].append(m)
+
+        for mesh in self.model.meshes:
+            anchor = max(self.id_map[b] for b in set(mesh.vertex_bone))
+            self.node_to_mesh[anchor].append(mesh)
 
     def encode(self) -> bytes:
         self._phase1()
@@ -51,6 +49,10 @@ class SbcEncoder:
 
         return self.sbc.get_bytes()
 
+    def get_shape_matrices(self) -> dict[int, tuple[int | None, dict[int, int]]]:
+        shps = [cmd for cmd in self.cmds if isinstance(cmd, SbcShp)]
+        return {shp.idx: (shp.entry_matrix, shp.slot_of) for shp in shps}
+
     def _phase1(self):
         # Phase 1: Emit the command stream, but don't care about matrix stack slots.
         # Draws are interleaved with NODEDESCs to reduce matrix stack usage.
@@ -60,7 +62,7 @@ class SbcEncoder:
                 id=self.id_map[id],
                 parent=self.id_map[bone.parent] if bone.parent != id else self.id_map[id],
                 world_mtx=bone.world_mtx,
-                desc_idx=len(self.nodes),
+                desc_idx=len(self.cmds),
                 ssc=bone.scale_compensate
             )
 
@@ -83,7 +85,8 @@ class SbcEncoder:
                 self._emit_mat(mesh.material)
                 self.current_bound_mat = mesh.material
 
-            self._emit_shp(self.shape_map[mesh.name])
+            remapped = [self.id_map[b] for b in set(mesh.vertex_bone)]
+            self._emit_shp(self.shape_map[mesh.name], remapped)
         self._emit_posscale(inverse=True)
 
     def _phase2(self):
@@ -130,6 +133,9 @@ class SbcEncoder:
                     cmd.store(slot)
                     highest_slot = max(highest_slot, slot + 1)
 
+            # Resolve matrices a SHP call will need
+            cmd.resolve(where, current)
+
             # Check for any matrices that die at this command and free their slots for reuse
             for dead in self.dies_at[i]:
                 slot = where.pop(dead, None)
@@ -145,13 +151,9 @@ class SbcEncoder:
             flags=NodeDescFlag.SSC_APPLY if node.ssc else NodeDescFlag.NONE
         ))
 
-        # If this node has SSC, we need to adjust all parents up the hierarchy
-        if node.ssc:
-            parent_id = node.parent
-            while parent_id != node.id:
-                parent_node = self.nodes[parent_id]
-                self.cmds[parent_node.desc_idx].ssc_parent()
-                parent_id = parent_node.parent
+        # If this node has SSC, we need to adjust its parent
+        if node.ssc and node.id != node.parent:
+            self._desc_for_node(node.parent).ssc_parent()
 
     def _emit_node(self, node: int, visible: bool):
         self.cmds.append(SbcNode(node=node, visible=visible))
@@ -177,14 +179,17 @@ class SbcEncoder:
 
         self.cmds.append(cmd(mat=idx))
 
-    def _emit_shp(self, idx: int):
-        self.cmds.append(SbcShp(idx=idx))
+    def _emit_shp(self, idx: int, bones: list[int]):
+        self.cmds.append(SbcShp(idx=idx, bones=bones))
 
     def _emit_ret(self):
         self.cmds.append(SbcRet())
 
     def _emit_nop(self):
         self.cmds.append(SbcNop())
+
+    def _desc_for_node(self, node: int) -> SbcNodeDesc:
+        return self.cmds[self.nodes[node].desc_idx]
 
 
 def _lowest_free(slots: list[int | None]) -> int:
