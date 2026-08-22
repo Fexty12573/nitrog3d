@@ -240,6 +240,10 @@ def expand5(v: int) -> int:
     return (v * 255 + 15) // 31
 
 
+def quantize5(c8: int) -> int:
+    return (c8 * 31 + 127) // 255
+
+
 def unpack3x10(v: int) -> tuple[int, int, int]:
     return (
         sign_extend(v & 0x3FF, 10),
@@ -257,6 +261,10 @@ def extract_bgr555(bgr: int) -> tuple[int, int, int]:
     g = expand5((bgr >> 5) & 0x1F)
     r = expand5(bgr & 0x1F)
     return (r, g, b)
+
+
+def pack_bgr555(r: int, g: int, b: int) -> int:
+    return ((quantize5(b) & 0x1F) << 10) | ((quantize5(g) & 0x1F) << 5) | (quantize5(r) & 0x1F)
 
 
 def bgr555_to_float(bgr: int) -> tuple[float, float, float]:
