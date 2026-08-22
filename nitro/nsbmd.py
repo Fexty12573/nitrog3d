@@ -52,3 +52,15 @@ class NSBMD:
         cont.write(w)
 
         return w.get_bytes()
+
+    @classmethod
+    def build(cls, mdl: MDL0, tex: TEX0 | None = None) -> NSBMD:
+        nsbmd = cls.__new__(cls)
+        nsbmd.container = Container.build(
+            sig="BMD0",
+            num_blocks=1 if tex is None else 2
+        )
+
+        nsbmd.model_set = mdl
+        nsbmd.tex_pltt_set = tex
+        return nsbmd

@@ -1,5 +1,9 @@
 
 from .binary import BinaryReader, BinaryWriter
+from typing import Literal
+
+
+Endian = Literal["little", "big"]
 
 
 class Container:
@@ -24,3 +28,18 @@ class Container:
         w.write_u16(self.header_size)
         w.write_u16(self.num_blocks)
         w.write_u32s(self.block_offsets)
+
+    @classmethod
+    def build(cls,
+              sig: str,
+              num_blocks: int = 0,
+              endian: Endian = 'little',
+              version: int = 2) -> Container:
+        c = cls.__new__(cls)
+        c.signature = sig
+        c.endianness = 0xFEFF if endian == "little" else 0xFFFE
+        c.version = version
+        c.file_size = 0
+        c.header_size = 0
+        c.num_blocks = num_blocks
+        c.block_offsets = [0] * num_blocks
