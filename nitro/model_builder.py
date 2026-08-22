@@ -29,7 +29,7 @@ class ModelBuilder:
         self.sub = sub
         self.pos_scale = 1.0
         self.shapes: list[EmittedShape] = []
-        self.dls: list[bytes] = []
+        self.dls: list[EncodedDl] = []
         self.bones: list[tuple[int, Bone]] = []
         self.id_map: dict[int, int] = {}
         self.sbc = bytes()
@@ -113,7 +113,14 @@ class ModelBuilder:
                 *self.shape_matrices[shape.index],
                 pos_scale=self.pos_scale
             )
-            self.dls.append(enc.encode())
+            self.dls.append(EncodedDl(
+                enc.encode(),
+                total_vertices=enc.total_vertices,
+                has_normal=enc.has_normal,
+                has_color=enc.has_color,
+                has_uv=enc.has_uv,
+                has_restore=enc.has_restore
+            ))
             self.total_vertices += enc.total_vertices
 
     def _build_nodes(self) -> mdl0.NodeSet:
@@ -159,7 +166,13 @@ class ModelBuilder:
     def _build_shapes(self) -> mdl0.ShapeSet:
         shapes: dict[str, mdl0.Shape] = {}
         for shape, dl in zip(self.shapes, self.dls):
-            shapes[shape.name] = mdl0.Shape.build(tag=0, flag=0, dl=dl)
+            shapes[shape.name] = mdl0.Shape.build(
+                dl=dl.dl,
+                has_normal=dl.has_normal,
+                has_color=dl.has_color,
+                has_uv=dl.has_uv,
+                has_restore=dl.has_restore
+            )
 
         return mdl0.ShapeSet.build(shapes)
 
@@ -196,6 +209,16 @@ class EmittedShape:
     name: str
     mesh: ImportedMesh
     material: int
+
+
+@dataclass(slots=True)
+class EncodedDl:
+    dl: bytes
+    total_vertices: int
+    has_normal: bool
+    has_color: bool
+    has_uv: bool
+    has_restore: bool
 
 
 def _preorder_bones(bones: list[Bone]) -> list[tuple[int, Bone]]:

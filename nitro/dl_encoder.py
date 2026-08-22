@@ -44,6 +44,10 @@ class DlEncoder:
         self.prev_uv: int | None = None
         self.prev_vtx: tuple[int, int, int] | None = None
 
+        self.has_restore = False
+        self.has_normal = mesh.has_normals
+        self.has_color = mesh.has_colors
+        self.has_uv = mesh.has_uv
         self.total_vertices = 0
 
     def encode(self) -> bytes:
@@ -111,6 +115,7 @@ class DlEncoder:
     def _restore_mtx(self, slot: int):
         self._emit(DlCmd.RESTORE_MTX, "<I", slot)
         self.prev_normal = None  # Matrix restore clears normal
+        self.has_restore = True
 
     def _scale(self, sx: float, sy: float, sz: float):
         self._emit(DlCmd.SCALE, "<iii", to_fx(sx), to_fx(sy), to_fx(sz))

@@ -3,7 +3,7 @@ from __future__ import annotations
 from .binary import BinaryReader, BinaryWriter, FX16_SCALE, float_to_bgr555
 from .dictionary import read_dictionary, write_dictionary, make_dictionary
 from .tex0 import TexImageParam, TexFmt
-from enum import IntEnum
+from enum import IntEnum, IntFlag
 
 
 def _hasflag(field: int, flag: int) -> bool:
@@ -57,6 +57,14 @@ class ScalingRule(IntEnum):
     DEFAULT = 0
     MAYA = 1
     SI3D = 2
+
+
+class ShapeFlags(IntFlag):
+    NONE = 0x0
+    USE_NORMAL = 0x1
+    USE_COLOR = 0x2
+    USE_TEXCOORD = 0x4
+    USE_RESTOREMTX = 0x8
 
 
 class PolygonAttr:
@@ -962,7 +970,7 @@ class Shape:
         base = r.tell()
         self.tag = r.read_u16()
         self.size = r.read_u16()
-        self.flag = r.read_u32()
+        self.flag = ShapeFlags(r.read_u32())
         self.dl_offset = r.read_u32()
         self.dl_size = r.read_u32()
         resume = r.tell()
@@ -973,16 +981,24 @@ class Shape:
     def write(self, w: BinaryWriter):
         w.write_u16(self.tag)
         w.write_u16(self.size)
-        w.write_u32(self.flag)
+        w.write_u32(int(self.flag))
         w.write_u32(self.dl_offset)
         w.write_u32(self.dl_size)
 
     @classmethod
-    def build(cls, tag: int, flag: int, dl: bytes) -> Shape:
+    def build(cls, dl: bytes, normal: bool, color: bool, uv: bool, restore: bool) -> Shape:
         s = cls.__new__(cls)
-        s.tag = tag
+        s.tag = 0
         s.size = 16
-        s.flag = flag
+        s.flag = ShapeFlags.NONE
+        if normal:
+            s.flag |= ShapeFlags.USE_NORMAL
+        if color:
+            s.flag |= ShapeFlags.USE_COLOR
+        if uv:
+            s.flag |= ShapeFlags.USE_UV
+        if restore:
+            s.flag |= ShapeFlags.RESTORE_STATE
         s.dl = dl
         s.dl_offset = 0
         s.dl_size = len(dl)
