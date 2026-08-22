@@ -3,6 +3,8 @@ from .tex0 import TexFmt
 from .binary import expand5, quantize5, pack_bgr555, extract_bgr555
 
 import struct
+from dataclasses import dataclass
+from typing import Literal
 
 
 _MAX_COLORS = {
@@ -12,6 +14,15 @@ _MAX_COLORS = {
     TexFmt.A3I5: 32,
     TexFmt.A5I3: 8,
 }
+
+
+@dataclass
+class TextureAnalysisResult:
+    ncolors555: int
+    ncolors888: int
+    nalphas: int
+    alpha_kind: Literal["opaque", "binary", "graded"]
+    suggested: TexFmt
 
 
 def rgba8_to_abgr1555(r: int, g: int, b: int, a: int) -> int:
@@ -82,6 +93,29 @@ def encode_rgba(rgba: list[int],
     return data, pal
 
 
+def analyze_texture(rgba: list[int], w: int, h: int) -> TextureAnalysisResult:
+    n = w * h
+    colors555, alphas = _stats(rgba, n)
+    colors888: set[tuple[int, int, int]] = set()
+    for i in range(n):
+        base = i * 4
+        colors888.add(tuple(rgba[base:base+3]))
+    opaque = alphas <= {255}
+    binary = alphas <= {0, 255}
+    return TextureAnalysisResult(
+        ncolors555=len(colors555),
+        ncolors888=len(colors888),
+        nalphas=len(alphas),
+        alpha_kind="opaque" if opaque else ("binary" if binary else "graded"),
+        suggested=_choose_format(colors555, alphas)
+    )
+
+
+def choose_format(rgba: list[int], w: int, h: int) -> TexFmt:
+    colors, alphas = _stats(rgba, w * h)
+    return _choose_format(colors, alphas)
+
+
 def build_palette(rgba: list[int],
                   n: int,
                   max_colors: int,
@@ -127,6 +161,68 @@ def build_palette(rgba: list[int],
 
     idx = _map_indices(rgba, n, palette, reserve0)
     return palette, idx, exact
+
+
+def _stats(rgba: list[int], n: int) -> tuple[set[int], set[int]]:
+    colors: set[int] = set()
+    alphas: set[int] = set()
+    for i in range(n):
+        base = i * 4
+        colors.add(pack_bgr555(*rgba[base:base+3]))
+        alphas.add(rgba[base + 3])
+    return colors, alphas
+
+
+def _fits(fmt: TexFmt, ncolors: int, alphas: set[int]) -> bool:
+    opaque = alphas <= {255}
+    binary = alphas <= {0, 255}
+    match fmt:
+        case TexFmt.DIRECT:
+            return opaque or binary
+        case TexFmt.PLTT4:
+            return (opaque or binary) and ncolors <= (4 if opaque else 3)
+        case TexFmt.PLTT16:
+            return (opaque or binary) and ncolors <= (16 if opaque else 15)
+        case TexFmt.PLTT256:
+            return (opaque or binary) and ncolors <= (256 if opaque else 255)
+        case TexFmt.A3I5:
+            return ncolors <= 32
+        case TexFmt.A5I3:
+            return ncolors <= 8
+    return False
+
+
+def _choose_format(colors: set[int], alphas: set[int], preference: TexFmt | None = None) -> TexFmt:
+    ncolors = len(colors)
+    if preference is not None and preference != TexFmt.COMP4X4 and _fits(preference, ncolors, alphas):
+        return preference
+
+    opaque = alphas <= {255}
+    binary = alphas <= {0, 255}
+    if opaque:
+        if ncolors <= 4:
+            return TexFmt.PLTT4
+        if ncolors <= 16:
+            return TexFmt.PLTT16
+        if ncolors <= 256:
+            return TexFmt.PLTT256
+        return TexFmt.DIRECT
+    if binary:
+        if ncolors <= 3:
+            return TexFmt.PLTT4
+        if ncolors <= 15:
+            return TexFmt.PLTT16
+        if ncolors <= 255:
+            return TexFmt.PLTT256
+        return TexFmt.DIRECT
+
+    nalphas = len(alphas)
+    if nalphas <= 8 and ncolors <= 32:
+        return TexFmt.A3I5
+    if ncolors <= 8:
+        return TexFmt.A5I3
+
+    return TexFmt.A3I5
 
 
 def _median_cut(color_counts: list[tuple[tuple[int, int, int], int]],
