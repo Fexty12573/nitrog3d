@@ -26,8 +26,13 @@ jobs:
             "https://download.blender.org/release/Blender4.2/${BLENDER}.tar.xz"
           tar xf blender.tar.xz
           echo "$PWD/${BLENDER}" >> "$GITHUB_PATH"
-      - run: blender --command extension validate
-      - run: blender --command extension build --output-dir dist
+
+      - name: Validate
+        run: blender --command extension validate
+
+      - name: Build
+        run: mkdir -p dist && blender --command extension build --output-dir dist
+
       - uses: actions/upload-artifact@v7
         with:
           name: nitrog3d-${{ github.sha }}
