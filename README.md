@@ -11,7 +11,7 @@ The currently implemented (and planned) features are as follows:
 - [x] Exporting fully custom models to NSBMD
 - [ ] Importing separate NSBTXs for textures
 - [ ] Export of meshes using Quads/Tri-strips/Quad-strips (Currently everything is triangulated)
-- [ ] Export of textures
+- [x] Export of textures
 - [ ] Proper Material Editing
 - [ ] Importing custom textures
 - Later
