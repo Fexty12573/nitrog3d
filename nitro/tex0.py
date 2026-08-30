@@ -18,6 +18,9 @@ class TexFmt(IntEnum):
     def has_alpha(self) -> bool:
         return self in (self.A3I5, self.A5I3, self.COMP4X4, self.DIRECT)
 
+    def is_pltt_n(self) -> bool:
+        return self in (self.PLTT4, self.PLTT16, self.PLTT256)
+
 
 class TexGen(IntEnum):
     NONE = 0

@@ -1,4 +1,3 @@
-
 import bpy
 import numpy as np
 from bpy_extras.io_utils import axis_conversion
@@ -18,7 +17,9 @@ class ImportOptions:
     bone_length: float = 0.1
 
 
-def import_nsbmd(context: bpy.types.Context, filepath: str, opts: ImportOptions = ImportOptions()):
+def import_nsbmd(
+    context: bpy.types.Context, filepath: str, opts: ImportOptions = ImportOptions()
+):
     with open(filepath, "rb") as f:
         data = f.read()
 
@@ -51,21 +52,13 @@ def import_nsbmd(context: bpy.types.Context, filepath: str, opts: ImportOptions 
 
         arm_obj: bpy.types.Armature | None = None
         if opts.create_armature and sub.bones:
-            arm_obj = _build_armature(
-                sub, global_mtx, opts.bone_length, collection)
+            arm_obj = _build_armature(sub, global_mtx, opts.bone_length, collection)
             created.append(arm_obj)
 
         anchor = arm_obj
         for mi, mesh in enumerate(sub.meshes):
             obj = _build_mesh_object(
-                sub,
-                mesh,
-                mi,
-                smi,
-                global_mtx,
-                bl_materials,
-                opts.flip_uv,
-                collection
+                sub, mesh, mi, smi, global_mtx, bl_materials, opts.flip_uv, collection
             )
             if arm_obj is not None:
                 _bind_to_armature(obj, mesh, sub, arm_obj)
@@ -80,11 +73,16 @@ def import_nsbmd(context: bpy.types.Context, filepath: str, opts: ImportOptions 
     return created, model
 
 
-def _make_material(imat: mdl.ImportedMaterial, image_cache: dict[str, bpy.types.Image]) -> bpy.types.Material:
+def _make_material(
+    imat: mdl.ImportedMaterial, image_cache: dict[str, bpy.types.Image]
+) -> bpy.types.Material:
     mat = bpy.data.materials.new(imat.name)
     mat.use_nodes = True
 
     nt = mat.node_tree
+    if nt is None:
+        raise RuntimeError(f"{imat.name}: node tree missing after enabling nodes")
+
     nt.nodes.clear()
 
     out = nt.nodes.new("ShaderNodeOutputMaterial")
@@ -94,6 +92,17 @@ def _make_material(imat: mdl.ImportedMaterial, image_cache: dict[str, bpy.types.
     bsdf.location = (100, 0)
 
     nt.links.new(bsdf.outputs["BSDF"], out.inputs["Surface"])
+
+    if imat.polygon_attr is not None:
+        mat["nsbmd_poly_attr"] = imat.polygon_attr.v
+    if imat.tex_img_param is not None:
+        mat["nsbmd_tex_img_param"] = imat.tex_img_param.v
+    if imat.tex_name is not None:
+        mat["nsbmd_tex_name"] = imat.tex_name
+    if imat.pltt_name is not None:
+        mat["nsbmd_pltt_name"] = imat.pltt_name
+    if imat.tex_size != (0, 0):
+        mat["nsbmd_orig_size"] = imat.tex_size
 
     r, g, b = imat.diffuse
     bsdf.inputs["Base Color"].default_value = (r, g, b, 1.0)
@@ -110,6 +119,8 @@ def _make_material(imat: mdl.ImportedMaterial, image_cache: dict[str, bpy.types.
         tex_node.interpolation = "Closest"
         nt.links.new(tex_node.outputs["Color"], bsdf.inputs["Base Color"])
 
+        mat["nsbmd_tex_format"] = int(imat.texture.fmt)
+
         if imat.texture.has_alpha:
             nt.links.new(tex_node.outputs["Alpha"], bsdf.inputs["Alpha"])
             mat.blend_method = "HASHED"
@@ -120,13 +131,14 @@ def _make_material(imat: mdl.ImportedMaterial, image_cache: dict[str, bpy.types.
         bsdf.inputs["Alpha"].default_value = imat.alpha
 
     mat.use_backface_culling = (
-        imat.polygon_attr is not None
-        and imat.polygon_attr.cull_mode == CullMode.BACK
+        imat.polygon_attr is not None and imat.polygon_attr.cull_mode == CullMode.BACK
     )
     return mat
 
 
-def _make_image(tex: mdl.DecodedTexture, image_cache: dict[str, bpy.types.Image]) -> bpy.types.Image:
+def _make_image(
+    tex: mdl.DecodedTexture, image_cache: dict[str, bpy.types.Image]
+) -> bpy.types.Image:
     if tex.name in image_cache:
         return image_cache[tex.name]
 
@@ -150,7 +162,12 @@ def _make_image(tex: mdl.DecodedTexture, image_cache: dict[str, bpy.types.Image]
     return img
 
 
-def _build_armature(sub: mdl.ImportedSubModel, global_mtx: Matrix, bone_length: float, collection: bpy.types.Collection) -> bpy.types.Armature:
+def _build_armature(
+    sub: mdl.ImportedSubModel,
+    global_mtx: Matrix,
+    bone_length: float,
+    collection: bpy.types.Collection,
+) -> bpy.types.Armature:
     arm_data = bpy.data.armatures.new(sub.name + "_Armature")
     arm_obj = bpy.data.objects.new(sub.name + "_Armature", arm_data)
     collection.objects.link(arm_obj)
@@ -164,7 +181,7 @@ def _build_armature(sub: mdl.ImportedSubModel, global_mtx: Matrix, bone_length: 
         eb = arm_data.edit_bones.new(bone.name)
         eb.head = (0.0, 0.0, 0.0)
         eb.tail = (0.0, bone_length, 0.0)
-        eb.inherit_scale = 'NONE' if bone.scale_compensate else 'FULL'
+        eb.inherit_scale = "NONE" if bone.scale_compensate else "FULL"
         full = global_mtx @ _ds_matrix_to_blender(bone.world_mtx)
         loc, rot, _ = full.decompose()
         eb.matrix = Matrix.Translation(loc) @ rot.to_matrix().to_4x4()
@@ -177,20 +194,21 @@ def _build_armature(sub: mdl.ImportedSubModel, global_mtx: Matrix, bone_length: 
     bpy.ops.object.mode_set(mode="OBJECT")
 
     for db in arm_data.bones:
-        db["nsbmd_rest"] = [db.matrix_local[i][j]
-                            for i in range(4) for j in range(4)]
+        db["nsbmd_rest"] = [db.matrix_local[i][j] for i in range(4) for j in range(4)]
 
     return arm_obj
 
 
-def _build_mesh_object(sub: mdl.ImportedSubModel,
-                       mesh: mdl.ImportedMesh,
-                       mesh_idx: int,
-                       model_idx: int,
-                       global_mtx: Matrix,
-                       bl_materials: list,
-                       flip_uv: bool,
-                       collection: bpy.types.Collection) -> bpy.types.Object:
+def _build_mesh_object(
+    sub: mdl.ImportedSubModel,
+    mesh: mdl.ImportedMesh,
+    mesh_idx: int,
+    model_idx: int,
+    global_mtx: Matrix,
+    bl_materials: list,
+    flip_uv: bool,
+    collection: bpy.types.Collection,
+) -> bpy.types.Object:
     me = bpy.data.meshes.new(f"{sub.name}_{mesh.name}_{mesh_idx}")
     verts = [tuple(global_mtx @ Vector(v)) for v in mesh.vertices]
     me.from_pydata(verts, [], mesh.faces)
@@ -202,19 +220,22 @@ def _build_mesh_object(sub: mdl.ImportedSubModel,
             uvl.data[i].uv = (u, 1.0 - v if flip_uv else v)
 
     if mesh.has_colors and mesh.loop_colors:
-        ca = me.color_attributes.new(
-            name="Color", type="BYTE_COLOR", domain="CORNER")
+        ca = me.color_attributes.new(name="Color", type="BYTE_COLOR", domain="CORNER")
         for i, col in enumerate(mesh.loop_colors):
             ca.data[i].color = (*col, 1.0)
 
     me.update()
     me.validate(clean_customdata=False)
 
-    if mesh.has_normals and mesh.loop_normals and len(mesh.loop_normals) == len(me.loops):
+    if (
+        mesh.has_normals
+        and mesh.loop_normals
+        and len(mesh.loop_normals) == len(me.loops)
+    ):
         gl3 = global_mtx.to_3x3()
         normals = []
         for n in mesh.loop_normals:
-            nv = (gl3 @ Vector(n))
+            nv = gl3 @ Vector(n)
             if nv.length > 1e-8:
                 nv.normalize()
             normals.append(tuple(nv))
@@ -237,7 +258,12 @@ def _build_mesh_object(sub: mdl.ImportedSubModel,
     return obj
 
 
-def _bind_to_armature(obj: bpy.types.Object, mesh: mdl.ImportedMesh, sub: mdl.ImportedSubModel, arm_obj: bpy.types.Object):
+def _bind_to_armature(
+    obj: bpy.types.Object,
+    mesh: mdl.ImportedMesh,
+    sub: mdl.ImportedSubModel,
+    arm_obj: bpy.types.Object,
+):
     groups: dict[str, bpy.types.VertexGroup] = {}
     for vi, bone_idx in enumerate(mesh.vertex_bone):
         if not (0 <= bone_idx < len(sub.bones)):
