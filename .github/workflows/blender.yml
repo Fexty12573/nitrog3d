@@ -22,10 +22,10 @@ jobs:
       - name: Install Blender
         run: |
           BLENDER=blender-4.2.9-linux-x64
-          curl -fsSL -o blender.tar.xz \
+          curl -fsSL -o "$RUNNER_TEMP/blender.tar.xz" \
             "https://download.blender.org/release/Blender4.2/${BLENDER}.tar.xz"
-          tar xf blender.tar.xz
-          echo "$PWD/${BLENDER}" >> "$GITHUB_PATH"
+          tar xf "$RUNNER_TEMP/blender.tar.xz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/${BLENDER}" >> "$GITHUB_PATH"
 
       - name: Validate
         run: blender --command extension validate
