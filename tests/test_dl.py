@@ -1,5 +1,14 @@
 import struct
-from itertools import batched
+
+try:
+    from itertools import batched
+except ImportError:  # Python < 3.12
+    from itertools import islice
+
+    def batched(iterable, n):
+        it = iter(iterable)
+        while group := tuple(islice(it, n)):
+            yield group
 
 import numpy as np
 import pytest
