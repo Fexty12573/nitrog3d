@@ -1,9 +1,9 @@
 schema_version = "1.0.0"
 
 id = "nitrog3d"
-version = "0.1.0"
+version = "1.0.0"
 name = "nitrog3d"
-tagline = "Work with Nintendo DS Nitro 3D file formats"
+tagline = "Extension to work with Nintendo DS NITRO 3D File Formats"
 maintainer = "Fexty"
 type = "add-on"
 
@@ -21,6 +21,9 @@ paths_exclude_pattern = [
     "/.git/",
     "/.gitignore",
     "/.gitattributes",
+    "/.venv/",
+    "/.vscode/",
+    "/.pytest_cache/",
     "/tools/",
     "/tests/",
     "/data/",
