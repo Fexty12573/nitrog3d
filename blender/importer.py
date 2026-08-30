@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from mathutils import Matrix, Vector
 from ..nitro import model as mdl
 from ..nitro.mdl0 import CullMode
+from .common import global_matrix
 
 
 @dataclass
@@ -22,7 +23,7 @@ def import_nsbmd(context: bpy.types.Context, filepath: str, opts: ImportOptions 
         data = f.read()
 
     model = mdl.load(data)
-    global_mtx = _global_matrix(opts.convert_axis)
+    global_mtx = global_matrix(opts.convert_axis)
     image_cache: dict[str, bpy.types.Image] = {}
     created: list[bpy.types.Object] = []
 
@@ -73,19 +74,10 @@ def import_nsbmd(context: bpy.types.Context, filepath: str, opts: ImportOptions 
             if anchor is None:
                 anchor = obj
 
+        if anchor is not None:
+            anchor["nsbmd_marker"] = "NSBMD"
+
     return created, model
-
-
-def _global_matrix(convert_axis: bool):
-    if convert_axis:
-        return axis_conversion(
-            from_forward='-Z',
-            from_up='Y',
-            to_forward='-Y',
-            to_up='Z'
-        ).to_4x4()
-
-    return Matrix.Identity(4)
 
 
 def _make_material(imat: mdl.ImportedMaterial, image_cache: dict[str, bpy.types.Image]) -> bpy.types.Material:
@@ -236,6 +228,10 @@ def _build_mesh_object(sub: mdl.ImportedSubModel,
         me.materials.append(bl_materials[mesh.material])
 
     obj = bpy.data.objects.new(me.name, me)
+    obj["nsbmd_model"] = model_idx
+    obj["nsbmd_shape"] = mesh_idx
+    obj["nsbmd_name"] = mesh.name
+
     collection.objects.link(obj)
 
     return obj

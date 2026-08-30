@@ -1,4 +1,5 @@
 
+from __future__ import annotations
 from .binary import BinaryReader, BinaryWriter
 from .mdl0 import MDL0
 from .tex0 import TEX0

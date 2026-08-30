@@ -168,10 +168,10 @@ class ModelBuilder:
         for shape, dl in zip(self.shapes, self.dls):
             shapes[shape.name] = mdl0.Shape.build(
                 dl=dl.dl,
-                has_normal=dl.has_normal,
-                has_color=dl.has_color,
-                has_uv=dl.has_uv,
-                has_restore=dl.has_restore
+                normal=dl.has_normal,
+                color=dl.has_color,
+                uv=dl.has_uv,
+                restore=dl.has_restore
             )
 
         return mdl0.ShapeSet.build(shapes)

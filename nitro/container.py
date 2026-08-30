@@ -1,4 +1,5 @@
 
+from __future__ import annotations
 from .binary import BinaryReader, BinaryWriter
 from typing import Literal
 
@@ -40,6 +41,7 @@ class Container:
         c.endianness = 0xFEFF if endian == "little" else 0xFFFE
         c.version = version
         c.file_size = 0
-        c.header_size = 0
+        c.header_size = 16
         c.num_blocks = num_blocks
         c.block_offsets = [0] * num_blocks
+        return c

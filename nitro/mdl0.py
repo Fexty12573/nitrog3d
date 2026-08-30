@@ -996,9 +996,9 @@ class Shape:
         if color:
             s.flag |= ShapeFlags.USE_COLOR
         if uv:
-            s.flag |= ShapeFlags.USE_UV
+            s.flag |= ShapeFlags.USE_TEXCOORD
         if restore:
-            s.flag |= ShapeFlags.RESTORE_STATE
+            s.flag |= ShapeFlags.USE_RESTOREMTX
         s.dl = dl
         s.dl_offset = 0
         s.dl_size = len(dl)
