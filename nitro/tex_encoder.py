@@ -45,8 +45,23 @@ def expand_alpha5(a5: int) -> int:
     return expand5(a5)
 
 
+PALETTE_ALIGN = 16
+PALETTE_FILL = 0x7FFF
+
+
 def palette_to_bytes(pal: list[int], fmt: TexFmt) -> bytes:
-    return struct.pack(f"<{len(pal)}H", *[c & 0xFFFF for c in pal])
+    colors = [c & 0xFFFF for c in pal]
+    n = len(colors)
+
+    nbytes = max(
+        ((n * 2 + PALETTE_ALIGN - 1) // PALETTE_ALIGN) * PALETTE_ALIGN, PALETTE_ALIGN
+    )
+    alloc = nbytes // 2
+    cap = _MAX_COLORS.get(fmt, alloc)
+
+    colors += [PALETTE_FILL] * max(0, min(alloc, cap) - n)
+    colors += [0x0000] * (alloc - len(colors))
+    return struct.pack(f"<{len(colors)}H", *colors)
 
 
 def palette_rgb8(palette: list[int]) -> list[tuple[int, int, int]]:
