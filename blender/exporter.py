@@ -603,16 +603,14 @@ class _TextureTable:
             return None
 
         if img.name not in self._by_image:
-            self._by_image[img.name] = self._decode(bl_mat, img)
+            self._by_image[img.name] = self._decode(img)
         return self._by_image[img.name]
 
     def palette_name(self, dt: mdl.DecodedTexture) -> str | None:
         """None for DIRECT textures, which carry no palette."""
         return self._palette_names.get(dt.name)
 
-    def _decode(
-        self, bl_mat: bpy.types.Material, img: bpy.types.Image
-    ) -> mdl.DecodedTexture | None:
+    def _decode(self, img: bpy.types.Image) -> mdl.DecodedTexture | None:
         w, h = img.size
         if not is_nds_dim(w) or not is_nds_dim(h):
             self._warn.append(
@@ -630,13 +628,9 @@ class _TextureTable:
             )
 
         color0_transparent = _texture_color0(img, fmt, rgba)
-        name = self._names.take(
-            bl_mat.get("nsbmd_tex_name") or img.nitro.name or img.name
-        )
+        name = self._names.take(img.name)
         if fmt != TexFmt.DIRECT:
-            self._palette_names[name] = self._pltt_names.take(
-                bl_mat.get("nsbmd_pltt_name") or f"{name}_pl"
-            )
+            self._palette_names[name] = self._pltt_names.take(f"{name}_pl")
 
         dt = mdl.DecodedTexture(
             name,

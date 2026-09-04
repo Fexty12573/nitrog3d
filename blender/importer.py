@@ -99,10 +99,6 @@ def _make_material(
         mat["nsbmd_poly_attr"] = imat.polygon_attr.v
     if imat.tex_img_param is not None:
         mat["nsbmd_tex_img_param"] = imat.tex_img_param.v
-    if imat.tex_name is not None:
-        mat["nsbmd_tex_name"] = imat.tex_name
-    if imat.pltt_name is not None:
-        mat["nsbmd_pltt_name"] = imat.pltt_name
     if imat.tex_size != (0, 0):
         mat["nsbmd_orig_size"] = imat.tex_size
 
@@ -160,9 +156,6 @@ def _make_image(
     img.pack()
     img.use_fake_user = True
 
-    img.nitro.name = tex.name
-    img.nitro.width = w
-    img.nitro.height = h
     img.nitro.format = tex.fmt.name
     img.nitro.color0 = "TRANSPARENT" if tex.color0_transparent else "NORMAL"
 

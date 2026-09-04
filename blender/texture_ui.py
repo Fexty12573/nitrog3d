@@ -1,7 +1,7 @@
 import bpy
 import bpy.utils.previews
 import numpy as np
-from bpy.props import BoolProperty, EnumProperty, StringProperty
+from bpy.props import BoolProperty, EnumProperty
 from bpy.types import Context, Operator
 
 from .common import image_to_rgba, is_nds_dim
@@ -77,12 +77,6 @@ class NITROG3D_OT_convert(Operator):
         default="AUTO",
     )
 
-    name: StringProperty(
-        name="Name",
-        description="An optional custom name to be used in the binary file",
-        default="",
-    )
-
     @classmethod
     def poll(cls, context: Context):
         return getattr(context.space_data, "image", None) is not None
@@ -96,7 +90,6 @@ class NITROG3D_OT_convert(Operator):
 
         self.format = img.nitro.format
         self.color0 = img.nitro.color0
-        self.name = img.nitro.name
 
         self.ensure_state(img)
         self.rebuild_preview()
@@ -135,7 +128,6 @@ class NITROG3D_OT_convert(Operator):
         layout.separator()
         layout.prop(self, "format")
         layout.prop(self, "color0")
-        layout.prop(self, "name")
 
         img = getattr(context.space_data, "image", None)
         if img is None:
@@ -164,7 +156,6 @@ class NITROG3D_OT_convert(Operator):
             op.bake = bake
             op.format = self.format
             op.color0 = self.color0
-            op.name = self.name
 
     def _stats_text(self) -> str:
         w, h = self._size
@@ -191,7 +182,6 @@ class NITROG3D_OT_convert_apply(Operator):
 
     format: EnumProperty(items=FORMAT_ITEMS, default="AUTO", options={"HIDDEN"})
     color0: EnumProperty(items=COLOR0_ITEMS, default="AUTO", options={"HIDDEN"})
-    name: StringProperty(default="", options={"HIDDEN"})
     bake: BoolProperty(default=False, options={"HIDDEN"})
 
     @classmethod
@@ -204,9 +194,6 @@ class NITROG3D_OT_convert_apply(Operator):
 
         img.nitro.format = self.format
         img.nitro.color0 = self.color0
-        img.nitro.name = self.name
-        img.nitro.width = w
-        img.nitro.height = h
 
         if not self.bake:
             self.report({"INFO"}, f"{img.name}: will export as {self.format}")

@@ -1,6 +1,6 @@
 import bpy
 from bpy.types import PropertyGroup
-from bpy.props import EnumProperty, IntProperty, PointerProperty, StringProperty
+from bpy.props import EnumProperty, PointerProperty
 
 
 FORMAT_ITEMS = [
@@ -24,14 +24,6 @@ COLOR0_ITEMS = [
 
 
 class TextureProps(PropertyGroup):
-    name: StringProperty(name="Name", description="The name of the texture", default="")
-
-    width: IntProperty(name="Width", description="The width of the texture", default=0)
-
-    height: IntProperty(
-        name="Height", description="The height of the texture", default=0
-    )
-
     format: EnumProperty(
         name="Format",
         description="The pixel format of the texture",

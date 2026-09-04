@@ -312,7 +312,17 @@ class MaterialBuilder:
         return dt
 
     def _display_name(self, tex: str, pal: str | None) -> str:
-        return tex if pal in (None, tex) else f"{tex}.{pal}"
+        if tex not in self.textures:
+            return tex
+
+        base = f"{tex}.{pal}" if pal else tex
+        if base not in self.textures:
+            return base
+
+        i = 2
+        while f"{base}.{i}" in self.textures:
+            i += 1
+        return f"{base}.{i}"
 
     def _find_palette_bytes(self, pal_name: str | None) -> bytes:
         if pal_name is None:
