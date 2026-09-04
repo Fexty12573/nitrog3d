@@ -26,7 +26,7 @@ from ..nitro.tex0 import (
     TexRepeat,
 )
 from ..nitro import tex_encoder as texenc
-from .common import global_matrix
+from .common import global_matrix, image_to_rgba, is_nds_dim
 
 MAX_NAME_LEN = 16
 
@@ -614,13 +614,13 @@ class _TextureTable:
         self, bl_mat: bpy.types.Material, img: bpy.types.Image
     ) -> mdl.DecodedTexture | None:
         w, h = img.size
-        if not _is_valid_dim(w) or not _is_valid_dim(h):
+        if not is_nds_dim(w) or not is_nds_dim(h):
             self._warn.append(
                 f"{img.name}: {w}x{h} is not a valid DS texture size, skipped"
             )
             return None
 
-        rgba = _image_to_rgba(img)
+        rgba = image_to_rgba(img)
         fmt = _texture_format(img, rgba, w, h)
         if fmt == TexFmt.COMP4X4:
             fmt = texenc.analyze_texture(list(rgba), w, h).suggested
@@ -630,7 +630,9 @@ class _TextureTable:
             )
 
         color0_transparent = _texture_color0(img, fmt, rgba)
-        name = self._names.take(bl_mat.get("nsbmd_tex_name") or img.name)
+        name = self._names.take(
+            bl_mat.get("nsbmd_tex_name") or img.nitro.name or img.name
+        )
         if fmt != TexFmt.DIRECT:
             self._palette_names[name] = self._pltt_names.take(
                 bl_mat.get("nsbmd_pltt_name") or f"{name}_pl"
@@ -647,10 +649,6 @@ class _TextureTable:
         )
         self.textures[name] = dt
         return dt
-
-
-def _is_valid_dim(dim: int) -> bool:
-    return 8 <= dim <= 1024 and dim & (dim - 1) == 0
 
 
 def _material_image(mat: bpy.types.Material) -> bpy.types.Image | None:
@@ -671,14 +669,6 @@ def _material_image(mat: bpy.types.Material) -> bpy.types.Image | None:
             return link.from_node.image
 
     return next((n.image for n in nt.nodes if n.type == "TEX_IMAGE" and n.image), None)
-
-
-def _image_to_rgba(img: bpy.types.Image) -> bytes:
-    w, h = img.size
-    buf = np.empty(w * h * 4, dtype=np.float32)
-    img.pixels.foreach_get(buf)
-    px = (np.clip(buf, 0.0, 1.0) * 255.0 + 0.5).astype(np.uint8)
-    return px.reshape(h, w * 4)[::-1].tobytes()
 
 
 def _texture_format(img: bpy.types.Image, rgba: bytes, w: int, h: int) -> TexFmt:

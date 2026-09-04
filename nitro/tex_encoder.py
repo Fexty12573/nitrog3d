@@ -1,4 +1,3 @@
-
 from .tex0 import TexFmt
 from .binary import expand5, quantize5, pack_bgr555, extract_bgr555
 
@@ -38,6 +37,14 @@ def quantize_alpha5(a8: int) -> int:
     return quantize5(a8)
 
 
+def expand_alpha3(a3: int) -> int:
+    return (a3 * 255 + 3) // 7
+
+
+def expand_alpha5(a5: int) -> int:
+    return expand5(a5)
+
+
 def palette_to_bytes(pal: list[int], fmt: TexFmt) -> bytes:
     return struct.pack(f"<{len(pal)}H", *[c & 0xFFFF for c in pal])
 
@@ -46,13 +53,15 @@ def palette_rgb8(palette: list[int]) -> list[tuple[int, int, int]]:
     return [extract_bgr555(bgr) for bgr in palette]
 
 
-def encode_rgba(rgba: list[int],
-                w: int,
-                h: int,
-                fmt: TexFmt,
-                *,
-                palette: list[int] | None = None,
-                color0_transparent: bool = False) -> tuple[bytes, list[int] | None]:
+def encode_rgba(
+    rgba: list[int],
+    w: int,
+    h: int,
+    fmt: TexFmt,
+    *,
+    palette: list[int] | None = None,
+    color0_transparent: bool = False,
+) -> tuple[bytes, list[int] | None]:
     n = w * h
     if fmt == TexFmt.DIRECT:
         return _pack_direct(rgba, n), None
@@ -61,19 +70,16 @@ def encode_rgba(rgba: list[int],
         raise NotImplementedError("COMP4x4 not yet supported")
 
     reserve0 = color0_transparent and fmt in (
-        TexFmt.PLTT4, TexFmt.PLTT16, TexFmt.PLTT256
+        TexFmt.PLTT4,
+        TexFmt.PLTT16,
+        TexFmt.PLTT256,
     )
 
     if palette is not None:
         pal = palette
         idx = _map_indices(rgba, n, pal, reserve0)
     else:
-        pal, idx, exact = build_palette(
-            rgba,
-            n,
-            _MAX_COLORS[fmt],
-            reserve0
-        )
+        pal, idx, exact = build_palette(rgba, n, _MAX_COLORS[fmt], reserve0)
 
     if fmt == TexFmt.PLTT4:
         data = _pack_pltt4(idx, n)
@@ -93,13 +99,63 @@ def encode_rgba(rgba: list[int],
     return data, pal
 
 
+def quantize_rgba(
+    rgba: list[int],
+    w: int,
+    h: int,
+    fmt: TexFmt,
+    *,
+    palette: list[int] | None = None,
+    color0_transparent: bool = False,
+) -> list[int]:
+    n = w * h
+    if fmt == TexFmt.DIRECT:
+        out: list[int] = []
+        for i in range(n):
+            base = i * 4
+            r, g, b = extract_bgr555(pack_bgr555(*rgba[base : base + 3]))
+            out.extend((r, g, b, 255 if rgba[base + 3] >= 128 else 0))
+        return out
+
+    if fmt == TexFmt.COMP4X4:
+        raise NotImplementedError("COMP4x4 not yet supported")
+
+    reserve0 = color0_transparent and fmt in (
+        TexFmt.PLTT4,
+        TexFmt.PLTT16,
+        TexFmt.PLTT256,
+    )
+
+    if palette is not None:
+        pal = palette
+        idx = _map_indices(rgba, n, pal, reserve0)
+    else:
+        pal, idx, exact = build_palette(rgba, n, _MAX_COLORS[fmt], reserve0)
+
+    if fmt in (TexFmt.PLTT4, TexFmt.PLTT16, TexFmt.PLTT256):
+        alphas = [0 if reserve0 and idx[i] == 0 else 255 for i in range(n)]
+    elif fmt == TexFmt.A3I5:
+        alphas = [expand_alpha3(quantize_alpha3(rgba[i * 4 + 3])) for i in range(n)]
+    elif fmt == TexFmt.A5I3:
+        alphas = [expand_alpha5(quantize_alpha5(rgba[i * 4 + 3])) for i in range(n)]
+    else:
+        raise ValueError(f"Unsupported texture format: {fmt}")
+
+    pal8 = palette_rgb8(pal)
+    out = []
+    for i in range(n):
+        r, g, b = pal8[idx[i]]
+        out.extend((r, g, b, alphas[i]))
+    return out
+
+
 def analyze_texture(rgba: list[int], w: int, h: int) -> TextureAnalysisResult:
     n = w * h
     colors555, alphas = _stats(rgba, n)
     colors888: set[tuple[int, int, int]] = set()
     for i in range(n):
         base = i * 4
-        colors888.add(tuple(rgba[base:base+3]))
+        colors888.add(tuple(rgba[base : base + 3]))
     opaque = alphas <= {255}
     binary = alphas <= {0, 255}
     return TextureAnalysisResult(
@@ -107,7 +163,7 @@ def analyze_texture(rgba: list[int], w: int, h: int) -> TextureAnalysisResult:
         ncolors888=len(colors888),
         nalphas=len(alphas),
         alpha_kind="opaque" if opaque else ("binary" if binary else "graded"),
-        suggested=_choose_format(colors555, alphas)
+        suggested=_choose_format(colors555, alphas),
     )
 
 
@@ -116,10 +172,9 @@ def choose_format(rgba: list[int], w: int, h: int) -> TexFmt:
     return _choose_format(colors, alphas)
 
 
-def build_palette(rgba: list[int],
-                  n: int,
-                  max_colors: int,
-                  reserve0: bool) -> tuple[list[int], list[int], bool]:
+def build_palette(
+    rgba: list[int], n: int, max_colors: int, reserve0: bool
+) -> tuple[list[int], list[int], bool]:
     color_cap = max_colors - (1 if reserve0 else 0)
 
     order: list[int] = []
@@ -168,7 +223,7 @@ def _stats(rgba: list[int], n: int) -> tuple[set[int], set[int]]:
     alphas: set[int] = set()
     for i in range(n):
         base = i * 4
-        colors.add(pack_bgr555(*rgba[base:base+3]))
+        colors.add(pack_bgr555(*rgba[base : base + 3]))
         alphas.add(rgba[base + 3])
     return colors, alphas
 
@@ -192,9 +247,15 @@ def _fits(fmt: TexFmt, ncolors: int, alphas: set[int]) -> bool:
     return False
 
 
-def _choose_format(colors: set[int], alphas: set[int], preference: TexFmt | None = None) -> TexFmt:
+def _choose_format(
+    colors: set[int], alphas: set[int], preference: TexFmt | None = None
+) -> TexFmt:
     ncolors = len(colors)
-    if preference is not None and preference != TexFmt.COMP4X4 and _fits(preference, ncolors, alphas):
+    if (
+        preference is not None
+        and preference != TexFmt.COMP4X4
+        and _fits(preference, ncolors, alphas)
+    ):
         return preference
 
     opaque = alphas <= {255}
@@ -225,8 +286,9 @@ def _choose_format(colors: set[int], alphas: set[int], preference: TexFmt | None
     return TexFmt.A3I5
 
 
-def _median_cut(color_counts: list[tuple[tuple[int, int, int], int]],
-                k: int) -> list[tuple[int, int, int]]:
+def _median_cut(
+    color_counts: list[tuple[tuple[int, int, int], int]], k: int
+) -> list[tuple[int, int, int]]:
     if not color_counts or k <= 0:
         return []
 
@@ -259,7 +321,9 @@ def _median_cut(color_counts: list[tuple[tuple[int, int, int], int]],
     return [_box_average(b) for b in boxes if b]
 
 
-def _map_indices(rgba: list[int], n: int, palette: list[int], reserve0: bool) -> list[int]:
+def _map_indices(
+    rgba: list[int], n: int, palette: list[int], reserve0: bool
+) -> list[int]:
     pal8 = palette_rgb8(palette)
     start = 1 if reserve0 else 0
     cache: dict[tuple[int, int, int], int] = {}
@@ -341,15 +405,11 @@ def _pack_pltt256(idx: list[int], n: int) -> bytes:
 
 
 def _pack_a3i5(idx: list[int], alphas: list[int]) -> bytes:
-    return bytes(
-        ((alphas[i] & 7) << 5) | (idx[i] & 0x1F) for i in range(len(idx))
-    )
+    return bytes(((alphas[i] & 7) << 5) | (idx[i] & 0x1F) for i in range(len(idx)))
 
 
 def _pack_a5i3(idx: list[int], alphas: list[int]) -> bytes:
-    return bytes(
-        ((alphas[i] & 0x1F) << 3) | (idx[i] & 7) for i in range(len(idx))
-    )
+    return bytes(((alphas[i] & 0x1F) << 3) | (idx[i] & 7) for i in range(len(idx)))
 
 
 def _pack_direct(rgba: list[int], n: int) -> bytes:

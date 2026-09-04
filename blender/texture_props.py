@@ -8,7 +8,7 @@ FORMAT_ITEMS = [
     None,
     ("PLTT4", "2bpp", "2 bits per pixel, indexed (4 colors)", 2),
     ("PLTT16", "4bpp", "4 bits per pixel, indexed (16 colors)", 3),
-    ("PLTT26", "8bpp", "8 bits per pixel, indexed (256 colors)", 4),
+    ("PLTT256", "8bpp", "8 bits per pixel, indexed (256 colors)", 4),
     ("A3I5", "A3I5", "3 bits alpha, 5 bits color, indexed", 1),
     ("A5I3", "A5I3", "5 bits alpha, 3 bits color, indexed", 6),
     ("DIRECT", "RGB5551", "15 bits RGB, 1 bit alpha", 7),
