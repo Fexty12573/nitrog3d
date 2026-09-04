@@ -1,7 +1,7 @@
 schema_version = "1.0.0"
 
 id = "nitrog3d"
-version = "1.1.0"
+version = "1.2.0"
 name = "nitrog3d"
 tagline = "Extension to work with Nintendo DS NITRO 3D File Formats"
 maintainer = "Fexty"
