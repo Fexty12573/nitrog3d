@@ -113,6 +113,60 @@ class TexImageParam:
         return cls(w)
 
 
+class TexExtraParam:
+    """The second word of a texture dictionary entry (NNS `extraParam`).
+
+    Holds the texture's true pixel size. At bind time the SDK divides it by the
+    material's own origWidth/origHeight -- the size the UVs were authored
+    against -- to get the UV magnification (`bindMdlTex_Internal_` in
+    NitroSystem g3d/src/kernel.c)::
+
+        magW = (w != mat->origWidth) ? FX_Div(w, mat->origWidth) : FX32_ONE
+
+    So leaving this word zero is not cosmetic: w becomes 0 while the material
+    still reports its real width, magW/magH come out 0, and every UV collapses.
+
+    Layout per nnsys/g3d/binres/res_struct.h:
+        ORIGW  bits 0-10   (mask 0x000007ff)
+        ORIGH  bits 11-21  (mask 0x003ff800)
+        WHSAME bit  31     (mask 0x80000000)
+
+    WHSAME is set in every g3dcvtr-produced file we have and is never read back
+    by the SDK runtime, so it is a producer-side hint that the stored size
+    matches the texture's own S/T dimensions.
+    """
+
+    __slots__ = ("v",)
+
+    ORIGW_MASK = 0x000007FF
+    ORIGH_MASK = 0x003FF800
+    WHSAME_MASK = 0x80000000
+
+    def __init__(self, v: int):
+        self.v = v
+
+    @property
+    def orig_width(self) -> int:
+        return self.v & 0x7FF
+
+    @property
+    def orig_height(self) -> int:
+        return (self.v >> 11) & 0x7FF
+
+    @property
+    def wh_same(self) -> bool:
+        return bool(self.v & self.WHSAME_MASK)
+
+    @classmethod
+    def build(
+        cls, orig_width: int, orig_height: int, wh_same: bool = True
+    ) -> TexExtraParam:
+        w = cls.WHSAME_MASK if wh_same else 0
+        w |= (orig_height & 0x7FF) << 11
+        w |= orig_width & 0x7FF
+        return cls(w)
+
+
 _DATA_BITS = [
     0,  # NONE
     8,  # A3I5

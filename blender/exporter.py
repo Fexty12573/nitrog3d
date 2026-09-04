@@ -18,6 +18,7 @@ from ..nitro.tex0 import (
     Tex4x4Info,
     TexColor0Mode,
     TexDictData,
+    TexExtraParam,
     TexFlip,
     TexFmt,
     TexGen,
@@ -155,7 +156,8 @@ def _build_tex0(model: mdl.ImportedModel) -> TEX0:
             addr=0,
         )
 
-        entry = TexDictData.build(param, 0, data)
+        extra = TexExtraParam.build(dt.width, dt.height)
+        entry = TexDictData.build(param, extra.v, data)
         entry.offset = tex_ids.setdefault(data, len(tex_ids) + 1)
         textures[name] = entry
 
