@@ -621,7 +621,7 @@ class _TextureTable:
             return None
 
         rgba = _image_to_rgba(img)
-        fmt = _texture_format(bl_mat, rgba, w, h)
+        fmt = _texture_format(img, rgba, w, h)
         if fmt == TexFmt.COMP4X4:
             fmt = texenc.analyze_texture(list(rgba), w, h).suggested
             self._warn.append(
@@ -629,7 +629,7 @@ class _TextureTable:
                 f"re-encoded as {fmt.name}"
             )
 
-        color0_transparent = fmt.is_pltt_n() and any(a < 128 for a in rgba[3::4])
+        color0_transparent = _texture_color0(img, fmt, rgba)
         name = self._names.take(bl_mat.get("nsbmd_tex_name") or img.name)
         if fmt != TexFmt.DIRECT:
             self._palette_names[name] = self._pltt_names.take(
@@ -681,12 +681,18 @@ def _image_to_rgba(img: bpy.types.Image) -> bytes:
     return px.reshape(h, w * 4)[::-1].tobytes()
 
 
-def _texture_format(mat: bpy.types.Material, rgba: bytes, w: int, h: int) -> TexFmt:
-    stored = mat.get("nsbmd_tex_format")
-    if stored:
-        return TexFmt(int(stored))
+def _texture_format(img: bpy.types.Image, rgba: bytes, w: int, h: int) -> TexFmt:
+    if img.nitro is not None and img.nitro.format != "AUTO":
+        return TexFmt[img.nitro.format]
 
     return texenc.analyze_texture(list(rgba), w, h).suggested
+
+
+def _texture_color0(img: bpy.types.Image, fmt: TexFmt, rgba: bytes) -> bool:
+    if img.nitro is not None and img.nitro.color0 != "AUTO":
+        return img.nitro.color0 == "TRANSPARENT"
+
+    return fmt.is_pltt_n() and any(a < 128 for a in rgba[3::4])
 
 
 class _NameAllocator:

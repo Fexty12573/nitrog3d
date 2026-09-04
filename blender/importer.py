@@ -3,6 +3,8 @@ import numpy as np
 from bpy_extras.io_utils import axis_conversion
 from dataclasses import dataclass
 from mathutils import Matrix, Vector
+
+from ..nitro.tex0 import TexColor0Mode
 from ..nitro import model as mdl
 from ..nitro.mdl0 import CullMode
 from .common import global_matrix
@@ -157,6 +159,12 @@ def _make_image(
     img.pixels[:] = pixels
     img.pack()
     img.use_fake_user = True
+
+    img.nitro.name = tex.name
+    img.nitro.width = w
+    img.nitro.height = h
+    img.nitro.format = tex.fmt.name
+    img.nitro.color0 = "TRANSPARENT" if tex.color0_transparent else "NORMAL"
 
     image_cache[tex.name] = img
     return img
