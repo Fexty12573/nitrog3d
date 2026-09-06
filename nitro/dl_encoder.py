@@ -18,7 +18,8 @@ class DlEncoder:
                  bone_map: dict[int, int],
                  entry_matrix: int | None,
                  matrix_slots: dict[int, int],
-                 pos_scale: float):
+                 pos_scale: float,
+                 uv_scale: tuple[float, float] = (1.0, 1.0)):
         assert len(set(mesh.vertex_bone)) <= 29, \
             "Meshes with more than 29 bones are not supported"
 
@@ -38,6 +39,9 @@ class DlEncoder:
         self.entry_matrix = entry_matrix
         self.matrix_slots = matrix_slots
         self.pos_scale = pos_scale
+        # TEXCOORD is in texels, but Imported* types carry normalized UVs
+        # so we need to scale them back up
+        self.uv_scale = uv_scale
 
         self.prev_normal: int | None = None
         self.prev_color: int | None = None
@@ -101,7 +105,7 @@ class DlEncoder:
             self.prev_normal = encoded
 
     def _texcoord(self, uv: tuple[float, float]):
-        encoded = _encode_uv(uv)
+        encoded = _encode_uv(uv, self.uv_scale)
         if encoded != self.prev_uv:
             self._emit(DlCmd.TEXCOORD, "<I", encoded)
             self.prev_uv = encoded
@@ -215,9 +219,9 @@ def _sorted_faces(mesh: ImportedMesh) -> list[tuple[int, tuple[int, int, int]]]:
     return list(enumerate(mesh.faces))  # TODO: Sort by bone
 
 
-def _encode_uv(uv: tuple[float, float]) -> int:
-    s = int(round(uv[0] / TEXCOORD_SCALE)) & 0xFFFF
-    t = int(round(uv[1] / TEXCOORD_SCALE)) & 0xFFFF
+def _encode_uv(uv: tuple[float, float], scale: tuple[float, float]) -> int:
+    s = int(round(uv[0] * scale[0] / TEXCOORD_SCALE)) & 0xFFFF
+    t = int(round(uv[1] * scale[1] / TEXCOORD_SCALE)) & 0xFFFF
     return s | (t << 16)
 
 

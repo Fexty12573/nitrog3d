@@ -111,7 +111,8 @@ class ModelBuilder:
                 matrix_map,
                 self.id_map,
                 *self.shape_matrices[shape.index],
-                pos_scale=self.pos_scale
+                pos_scale=self.pos_scale,
+                uv_scale=self._uv_scale(shape.material)
             )
             self.dls.append(EncodedDl(
                 enc.encode(),
@@ -122,6 +123,20 @@ class ModelBuilder:
                 has_restore=enc.has_restore
             ))
             self.total_vertices += enc.total_vertices
+
+    def _uv_scale(self, material: int) -> tuple[float, float]:
+        if not (0 <= material < len(self.sub.materials)):
+            return (1.0, 1.0)
+
+        # Intentionally not using origWidth/origHeight because they are incorrect
+        # if the TEX0 block is missing. Using TexImageParam instead.
+        imat = self.sub.materials[material]
+        if imat.texture is not None:
+            return (float(imat.texture.width), float(imat.texture.height))
+        if imat.tex_img_param is not None:
+            return (float(imat.tex_img_param.width),
+                    float(imat.tex_img_param.height))
+        return (1.0, 1.0)
 
     def _build_nodes(self) -> mdl0.NodeSet:
         nodes: dict[str, mdl0.NodeData] = {}
