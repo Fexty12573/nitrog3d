@@ -102,8 +102,8 @@ def _decode_a3i5(data: bytes, pal: list[int]) -> list[int]:
 def _decode_a5i3(data: bytes, pal: list[int]) -> list[int]:
     out: list[int] = []
     for byte in data:
-        a5 = byte & 0x1F
-        i3 = byte >> 5
+        a5 = byte >> 3
+        i3 = byte & 0x7
         a8 = (a5 * 255 + 15) // 31
         out.append(_set_argb8888_alpha(_pal_get(pal, i3), a8))
     return out
