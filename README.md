@@ -13,7 +13,7 @@ The currently implemented (and planned) features are as follows:
 - [ ] Export of meshes using Quads/Tri-strips/Quad-strips (Currently everything is triangulated)
 - [x] Export of textures
 - [ ] Proper Material Editing
-- [ ] Importing custom textures
+- [x] Importing custom textures
 - Later
   - [ ] Bone Animations (NSBCA) Support
   - [ ] Texture Animations (NSBTP) Support
