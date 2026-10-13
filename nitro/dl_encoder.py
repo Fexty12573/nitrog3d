@@ -12,16 +12,19 @@ import numpy as np
 
 
 class DlEncoder:
-    def __init__(self,
-                 mesh: ImportedMesh,
-                 mtx_map: dict[int, tuple[np.ndarray, np.ndarray]],
-                 bone_map: dict[int, int],
-                 entry_matrix: int | None,
-                 matrix_slots: dict[int, int],
-                 pos_scale: float,
-                 uv_scale: tuple[float, float] = (1.0, 1.0)):
-        assert len(set(mesh.vertex_bone)) <= 29, \
+    def __init__(
+        self,
+        mesh: ImportedMesh,
+        mtx_map: dict[int, tuple[np.ndarray, np.ndarray]],
+        bone_map: dict[int, int],
+        entry_matrix: int | None,
+        matrix_slots: dict[int, int],
+        pos_scale: float,
+        uv_scale: tuple[float, float] = (1.0, 1.0),
+    ):
+        assert len(set(mesh.vertex_bone)) <= 29, (
             "Meshes with more than 29 bones are not supported"
+        )
 
         self.mesh = mesh
         self.dl = bin.BinaryWriter()
@@ -29,10 +32,8 @@ class DlEncoder:
 
         S = mat.scale(pos_scale, pos_scale, pos_scale)
         self.mtx_map = {
-            bone: _BoneMatrices(
-                pos=mat.inverse(S @ pos),
-                dir=mat.inverse(dir)
-            ) for bone, (pos, dir) in mtx_map.items()
+            bone: _BoneMatrices(pos=mat.inverse(S @ pos), dir=mat.inverse(dir))
+            for bone, (pos, dir) in mtx_map.items()
         }
 
         self.bone_map = bone_map
@@ -66,28 +67,28 @@ class DlEncoder:
                 if bone != current:
                     self._restore_mtx(self.matrix_slots[bone])
                     if self.pos_scale != 1.0:
-                        self._scale(
-                            self.pos_scale,
-                            self.pos_scale,
-                            self.pos_scale
-                        )
+                        self._scale(self.pos_scale, self.pos_scale, self.pos_scale)
                     current = bone
 
                 v = self.mesh.vertices[vi]
                 if self.mesh.has_uv:
-                    uv = self.mesh.loop_uvs[base+j]
+                    uv = self.mesh.loop_uvs[base + j]
                     self._texcoord(uv)
                 if self.mesh.has_normals:
-                    n = self.mesh.loop_normals[base+j]
+                    n = self.mesh.loop_normals[base + j]
                     self._normal(bone, n)
                 if self.mesh.has_colors:
-                    c = self.mesh.loop_colors[base+j]
+                    c = self.mesh.loop_colors[base + j]
                     self._color(c)
 
                 self._vertex(bone, v)
 
         self._end()
         self._flush()
+
+        # Some DL readers rely on an all-NOP instruction at the end of each DL so
+        # we add this here just in case.
+        self.dl.write_u32(0)
 
         return self.dl.get_bytes()
 
@@ -206,8 +207,7 @@ def _encode_vertex2x16(v0: int, v1: int) -> int:
 
 
 def _encode_normal(n: tuple[float, float, float]) -> int:
-    quantized = tuple(
-        bin.clamp(int(round(c / NORMAL_SCALE)), -512, 511) for c in n)
+    quantized = tuple(bin.clamp(int(round(c / NORMAL_SCALE)), -512, 511) for c in n)
     return bin.pack3x10(*quantized)
 
 
